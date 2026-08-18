@@ -289,11 +289,25 @@ final class BackupManager: ObservableObject {
             let key =
                 "\(asset.localIdentifier)|\(resource.type.rawValue)|\(actualFinalURL.lastPathComponent)"
 
+            let assetLocation: AssetLocation?
+            if let location = asset.location {
+                assetLocation = AssetLocation(
+                    latitude: location.coordinate.latitude,
+                    longitude: location.coordinate.longitude,
+                    altitude: location.verticalAccuracy >= 0 ? location.altitude : nil
+                )
+            } else {
+                assetLocation = nil
+            }
+
             manifest.entries[key] = ManifestEntry(
                 assetIdentifier: asset.localIdentifier,
                 filename: actualFinalURL.lastPathComponent,
                 byteCount: verifiedBytes,
-                completedAt: Date()
+                completedAt: Date(),
+                creationDate: asset.creationDate,
+                location: assetLocation,
+                resourceType: resource.type.rawValue
             )
 
             copied += 1
@@ -309,19 +323,26 @@ final class BackupManager: ObservableObject {
         case .image:
             var selected: [PHAssetResource] = []
 
-            if let fullPhoto = resources.first(where: { $0.type == .fullSizePhoto }) {
-                selected.append(fullPhoto)
-            } else if let photo = resources.first(where: { $0.type == .photo }) {
-                selected.append(photo)
+            // IMPORTANT: .photo is the original photo resource.
+            // .fullSizePhoto can represent the current/modified full-size rendition.
+            if let originalPhoto = resources.first(where: { $0.type == .photo }) {
+                selected.append(originalPhoto)
+            } else if let fallback = resources.first(where: { $0.type == .fullSizePhoto }) {
+                selected.append(fallback)
             }
 
+            // Preserve original Live Photo motion resource.
             if let pairedVideo = resources.first(where: { $0.type == .pairedVideo }) {
                 selected.append(pairedVideo)
             }
 
+            // Preserve alternate original photo resources such as RAW when exposed.
             for resource in resources {
                 if resource.type == .alternatePhoto &&
-                   !selected.contains(where: { $0.originalFilename == resource.originalFilename && $0.type == resource.type }) {
+                   !selected.contains(where: {
+                       $0.originalFilename == resource.originalFilename &&
+                       $0.type == resource.type
+                   }) {
                     selected.append(resource)
                 }
             }
@@ -329,12 +350,13 @@ final class BackupManager: ObservableObject {
             return selected
 
         case .video:
-            if let fullVideo = resources.first(where: { $0.type == .fullSizeVideo }) {
-                return [fullVideo]
+            // .video is the original video resource.
+            if let originalVideo = resources.first(where: { $0.type == .video }) {
+                return [originalVideo]
             }
 
-            if let video = resources.first(where: { $0.type == .video }) {
-                return [video]
+            if let fallback = resources.first(where: { $0.type == .fullSizeVideo }) {
+                return [fallback]
             }
 
             return []

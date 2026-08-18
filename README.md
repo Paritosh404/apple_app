@@ -1,4 +1,4 @@
-# PhotoUSBBackup v2.2 — Originals Only
+# PhotoUSBBackup v2.3 — Originals Only
 
 This build fixes the Photos-permission crash by defining
 `NSPhotoLibraryUsageDescription` in both:
@@ -70,3 +70,27 @@ When **Start Originals Backup** is tapped:
 This fixes the v2.1 symptom where the UI could remain on
 `Starting originals backup…` with no files copied while the Start button
 remained tappable.
+
+
+## v2.3 metadata/original-resource correction
+
+v2.3 changes resource selection to match the goal of **Export Unmodified Originals**:
+
+- Photos prefer `PHAssetResourceType.photo`
+- Videos prefer `PHAssetResourceType.video`
+- Live Photos export the original `.photo` plus `.pairedVideo`
+- `fullSizePhoto` / `fullSizeVideo` are fallback-only
+- Alternate photo resources (for example RAW/alternate originals when exposed by Photos) are preserved
+
+The destination manifest now also stores archival Photos-library metadata for every copied resource:
+
+- Photos local identifier
+- original/final filename
+- file size
+- creation date
+- latitude
+- longitude
+- altitude when available
+- resource type
+
+This means location information remains available in the manifest even when a particular original file does not contain embedded GPS metadata.

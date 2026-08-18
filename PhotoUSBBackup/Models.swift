@@ -16,11 +16,20 @@ struct FailedItem: Codable, Identifiable {
     }
 }
 
+struct AssetLocation: Codable {
+    let latitude: Double
+    let longitude: Double
+    let altitude: Double?
+}
+
 struct ManifestEntry: Codable {
     let assetIdentifier: String
     let filename: String
     let byteCount: Int64
     let completedAt: Date
+    let creationDate: Date?
+    let location: AssetLocation?
+    let resourceType: Int
 }
 
 struct BackupManifest: Codable {
