@@ -251,7 +251,7 @@ final class BackupManager: ObservableObject {
             root.appendingPathComponent("Originals", isDirectory: true),
             root.appendingPathComponent("Metadata-Disputed/Original", isDirectory: true),
             root.appendingPathComponent("Metadata-Disputed/GPS-Merged", isDirectory: true),
-            try localStagingDirectory()
+            root.appendingPathComponent(".PhotoUSBBackup-Staging", isDirectory: true)
         ]
 
         for folder in folders {
@@ -415,8 +415,7 @@ final class BackupManager: ObservableObject {
                         finalURL = desiredURL
                     }
 
-                    _ = try copyVerifiedLocalStageToUSB(localURL: stagedURL, finalURL: finalURL)
-            try? FileManager.default.removeItem(at: stagedURL)
+                    try FileManager.default.moveItem(at: stagedURL, to: finalURL)
                     let bytes = fileSize(of: finalURL)
                     guard bytes > 0 else {
                         throw BackupError.emptyOutput(finalURL.lastPathComponent)
@@ -1195,51 +1194,4 @@ enum BackupError: LocalizedError {
             return "Could not create GPS-merged copy for \(filename)."
         }
     }
-
-    private func localStagingDirectory() throws -> URL {
-            let base = FileManager.default.temporaryDirectory
-                .appendingPathComponent("PhotoUSBBackup-Staging", isDirectory: true)
-    
-            if !FileManager.default.fileExists(atPath: base.path) {
-                try FileManager.default.createDirectory(
-                    at: base,
-                    withIntermediateDirectories: true
-                )
-            }
-    
-            return base
-        }
-
-
-    private func copyVerifiedLocalStageToUSB(
-        localURL: URL,
-        finalURL: URL
-    ) throws -> Int64 {
-        let localBytes = fileSize(of: localURL)
-        guard localBytes > 0 else {
-            throw BackupError.emptyOutput(localURL.lastPathComponent)
-        }
-
-        let partialURL = finalURL.appendingPathExtension("partial")
-        try? FileManager.default.removeItem(at: partialURL)
-
-        try FileManager.default.copyItem(at: localURL, to: partialURL)
-
-        let partialBytes = fileSize(of: partialURL)
-        guard partialBytes == localBytes, partialBytes > 0 else {
-            try? FileManager.default.removeItem(at: partialURL)
-            throw BackupError.verificationFailed(finalURL.lastPathComponent)
-        }
-
-        try FileManager.default.moveItem(at: partialURL, to: finalURL)
-
-        let finalBytes = fileSize(of: finalURL)
-        guard finalBytes == localBytes, finalBytes > 0 else {
-            try? FileManager.default.removeItem(at: finalURL)
-            throw BackupError.verificationFailed(finalURL.lastPathComponent)
-        }
-
-        return finalBytes
-    }
-
 }

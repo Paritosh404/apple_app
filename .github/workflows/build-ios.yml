@@ -55,11 +55,11 @@ jobs:
 
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          /usr/bin/zip -qry PhotoUSBBackup-v2.7-unsigned.ipa Payload
+          /usr/bin/zip -qry PhotoUSBBackup-v2.8-unsigned.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: PhotoUSBBackup-v2.7-unsigned-ipa
-          path: PhotoUSBBackup-v2.7-unsigned.ipa
+          name: PhotoUSBBackup-v2.8-unsigned-ipa
+          path: PhotoUSBBackup-v2.8-unsigned.ipa
           if-no-files-found: error

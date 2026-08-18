@@ -20,7 +20,7 @@ targets:
       path: PhotoUSBBackup/Info.plist
       properties:
         CFBundleDisplayName: Originals Backup
-        CFBundleShortVersionString: "2.7"
+        CFBundleShortVersionString: "2.8"
         CFBundleVersion: "9"
         LSRequiresIPhoneOS: true
         NSPhotoLibraryUsageDescription: "Originals Backup needs access to copy your unmodified photo and video originals to an external drive."

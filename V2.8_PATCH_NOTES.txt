@@ -1,0 +1,9 @@
+PhotoUSBBackup v2.8 patch summary
+=================================
+- replaced remaining .PhotoUSBBackup-Staging construction
+- inserted localStagingDirectory helper
+- inserted verified local->USB helper
+- patched finalization (1)
+
+Base: PhotoUSBBackup-v2.7-Fast-Skip-Dedup.zip
+Primary change: app-local PhotoKit staging before verified USB copy.
