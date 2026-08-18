@@ -1,22 +1,65 @@
 name: Build iPhone IPA
-on: { workflow_dispatch: {} }
+
+on:
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: macos-26
+
     steps:
-      - uses: actions/checkout@v4
-      - run: xcodebuild -version
-      - run: brew install xcodegen
-      - run: xcodegen generate
-      - name: Build unsigned app
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Verify privacy key before build
         run: |
-          xcodebuild -project PhotoUSBBackup.xcodeproj -scheme PhotoUSBBackup -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" clean build
-      - name: Package IPA
+          /usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryUsageDescription" PhotoUSBBackup/Info.plist
+
+      - name: Build unsigned device app
         run: |
+          set -o pipefail
+          xcodebuild \
+            -project PhotoUSBBackup.xcodeproj \
+            -scheme PhotoUSBBackup \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
+
+      - name: Verify built app privacy key
+        run: |
+          APP_PLIST="build/Build/Products/Release-iphoneos/PhotoUSBBackup.app/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryUsageDescription" "$APP_PLIST"
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/PhotoUSBBackup.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Built .app not found at $APP_PATH"
+            exit 1
+          fi
+
           mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/PhotoUSBBackup.app Payload/
-          /usr/bin/zip -qry PhotoUSBBackup-v2-unsigned.ipa Payload
-      - uses: actions/upload-artifact@v4
+          cp -R "$APP_PATH" Payload/
+          /usr/bin/zip -qry PhotoUSBBackup-v2.1-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
         with:
-          name: PhotoUSBBackup-v2-unsigned-ipa
-          path: PhotoUSBBackup-v2-unsigned.ipa
+          name: PhotoUSBBackup-v2.1-unsigned-ipa
+          path: PhotoUSBBackup-v2.1-unsigned.ipa
+          if-no-files-found: error

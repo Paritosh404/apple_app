@@ -1,19 +1,54 @@
-# PhotoUSBBackup v2 — Originals Only
+# PhotoUSBBackup v2.1 — Originals Only
 
-Copies unmodified Photos originals to a user-selected external USB/SSD folder.
+This build fixes the Photos-permission crash by defining
+`NSPhotoLibraryUsageDescription` in both:
 
-Features: PhotoKit original resources, full-size photo/video preference, Live Photo paired MOV, alternate/RAW resource preservation when exposed, iCloud original download, .partial writes, resume manifest, file-size verification, failure JSON log, iOS 26 continued-processing support.
+1. `project.yml` through XcodeGen `info.properties`
+2. the physical `PhotoUSBBackup/Info.plist`
+
+The GitHub Actions workflow also verifies the privacy key twice:
+- before compilation
+- inside the final built `.app`
+
+If either check fails, the workflow stops instead of producing a broken IPA.
+
+## Main features
+
+- Exports unmodified Photos originals using PhotoKit.
+- Prefers `fullSizePhoto` / `fullSizeVideo`.
+- Includes Live Photo paired video.
+- Includes alternate photo resources when exposed by Photos.
+- Allows iCloud originals to download.
+- Uses `.partial` writes.
+- Renames only after successful completion.
+- Verifies output file size.
+- Keeps a resume manifest on the destination drive.
+- Preserves unrelated existing files rather than overwriting them.
+- Logs failed items.
+- Uses iOS 26 continued-processing support where available.
 
 ## Build from Windows
+
 1. Extract this ZIP.
-2. Create a GitHub repository.
-3. Upload all project files including `.github/workflows/build-ios.yml`.
-4. Open Actions → Build iPhone IPA → Run workflow.
-5. Download artifact `PhotoUSBBackup-v2-unsigned-ipa`.
-6. Extract it to get `PhotoUSBBackup-v2-unsigned.ipa`.
-7. Install using AltStore Classic / AltServer on Windows.
+2. Create or update your GitHub repository.
+3. Upload all project contents, including `.github`.
+4. Open GitHub → Actions.
+5. Run **Build iPhone IPA**.
+6. Wait for all steps to turn green.
+7. Download artifact:
+   `PhotoUSBBackup-v2.1-unsigned-ipa`
+8. Extract it to get:
+   `PhotoUSBBackup-v2.1-unsigned.ipa`
+9. Sideload through AltStore.
 
-## Test first
-Use a new empty USB folder, run a small backup, verify photos/videos open from the drive, stop and restart to confirm resume behavior, then run the whole library.
+## Important
 
-The app never deletes Photos-library items.
+Delete the previous crashing build from the iPhone before installing v2.1.
+
+On first launch, tap **Allow Photos Access**. iOS should now show the system Photos-permission dialog instead of terminating the app.
+
+For the first test:
+- use a fresh test folder on the USB/SSD,
+- copy a small sample,
+- verify normal photos, videos, and Live Photos,
+- then run the full library.

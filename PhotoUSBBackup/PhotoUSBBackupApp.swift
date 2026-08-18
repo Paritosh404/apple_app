@@ -2,8 +2,12 @@ import SwiftUI
 
 @main
 struct PhotoUSBBackupApp: App {
-    @StateObject private var backup = BackupManager.shared
+    @StateObject private var backupManager = BackupManager.shared
+
     var body: some Scene {
-        WindowGroup { ContentView().environmentObject(backup) }
+        WindowGroup {
+            ContentView()
+                .environmentObject(backupManager)
+        }
     }
 }
