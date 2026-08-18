@@ -32,7 +32,7 @@ final class BackupManager: ObservableObject {
     private var activeRunID: UUID?
     private var duplicateReport: [DuplicateReportItem] = []
 
-    // v2.8: one startup scan instead of recursive scanning per asset.
+    // v2.8.1: one startup scan instead of recursive scanning per asset.
     private var filenameIndex: [String: [URL]] = [:]
 
     private init() {
@@ -250,8 +250,7 @@ final class BackupManager: ObservableObject {
         let folders = [
             root.appendingPathComponent("Originals", isDirectory: true),
             root.appendingPathComponent("Metadata-Disputed/Original", isDirectory: true),
-            root.appendingPathComponent("Metadata-Disputed/GPS-Merged", isDirectory: true),
-            try localStagingDirectory()
+            root.appendingPathComponent("Metadata-Disputed/GPS-Merged", isDirectory: true)
         ]
 
         for folder in folders {
@@ -415,14 +414,16 @@ final class BackupManager: ObservableObject {
                         finalURL = desiredURL
                     }
 
-                    _ = try copyVerifiedLocalStageToUSB(localURL: stagedURL, finalURL: finalURL)
-            try? FileManager.default.removeItem(at: stagedURL)
-                    let bytes = fileSize(of: finalURL)
+                    let bytes = try copyVerifiedLocalStageToUSB(
+                        localURL: stagedURL,
+                        finalURL: finalURL
+                    )
+                    try? FileManager.default.removeItem(at: stagedURL)
                     guard bytes > 0 else {
                         throw BackupError.emptyOutput(finalURL.lastPathComponent)
                     }
 
-                    // v2.8: NO routine SHA-256 here.
+                    // v2.8.1: NO routine SHA-256 here.
                     // Add the new file to the in-memory filename index immediately.
                     addToFilenameIndex(finalURL)
 
@@ -596,8 +597,7 @@ final class BackupManager: ObservableObject {
         _ resource: PHAssetResource,
         root: URL
     ) async throws -> URL {
-        let stagingFolder = root
-            .appendingPathComponent(".PhotoUSBBackup-Staging", isDirectory: true)
+        let stagingFolder = try localStagingDirectory()
 
         let tempName = UUID().uuidString + "-" + safeFilename(resource.originalFilename)
         let stagedURL = stagingFolder.appendingPathComponent(tempName + ".partial")
@@ -712,7 +712,7 @@ final class BackupManager: ObservableObject {
         }
     }
 
-    // MARK: - v2.8 fast index + collision-only hashing
+    // MARK: - v2.8.1 fast index + collision-only hashing
 
     private func buildFilenameIndex(root: URL) -> [String: [URL]] {
         guard let enumerator = FileManager.default.enumerator(
@@ -1168,48 +1168,19 @@ final class BackupManager: ObservableObject {
         )
     }
 
-    func cancelBackup() {
-        shouldCancel = true
-        status = "Stopping after the current file…"
-    }
-}
-
-enum BackupError: LocalizedError {
-    case cancelled
-    case noUsableResource
-    case emptyOutput(String)
-    case resourceReadFailed(String, underlying: String)
-    case metadataMergeFailed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .cancelled:
-            return "Backup was cancelled."
-        case .noUsableResource:
-            return "No usable Photos resource was found for this asset."
-        case .emptyOutput(let filename):
-            return "PhotoKit produced an empty file for \(filename)."
-        case .resourceReadFailed(let filename, let underlying):
-            return "Could not read \(filename): \(underlying)"
-        case .metadataMergeFailed(let filename):
-            return "Could not create GPS-merged copy for \(filename)."
-        }
-    }
-
     private func localStagingDirectory() throws -> URL {
-            let base = FileManager.default.temporaryDirectory
-                .appendingPathComponent("PhotoUSBBackup-Staging", isDirectory: true)
-    
-            if !FileManager.default.fileExists(atPath: base.path) {
-                try FileManager.default.createDirectory(
-                    at: base,
-                    withIntermediateDirectories: true
-                )
-            }
-    
-            return base
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PhotoUSBBackup-Staging", isDirectory: true)
+
+        if !FileManager.default.fileExists(atPath: folder.path) {
+            try FileManager.default.createDirectory(
+                at: folder,
+                withIntermediateDirectories: true
+            )
         }
 
+        return folder
+    }
 
     private func copyVerifiedLocalStageToUSB(
         localURL: URL,
@@ -1223,7 +1194,15 @@ enum BackupError: LocalizedError {
         let partialURL = finalURL.appendingPathExtension("partial")
         try? FileManager.default.removeItem(at: partialURL)
 
-        try FileManager.default.copyItem(at: localURL, to: partialURL)
+        do {
+            try FileManager.default.copyItem(at: localURL, to: partialURL)
+        } catch {
+            try? FileManager.default.removeItem(at: partialURL)
+            throw BackupError.externalWriteFailed(
+                finalURL.lastPathComponent,
+                underlying: error.localizedDescription
+            )
+        }
 
         let partialBytes = fileSize(of: partialURL)
         guard partialBytes == localBytes, partialBytes > 0 else {
@@ -1231,7 +1210,15 @@ enum BackupError: LocalizedError {
             throw BackupError.verificationFailed(finalURL.lastPathComponent)
         }
 
-        try FileManager.default.moveItem(at: partialURL, to: finalURL)
+        do {
+            try FileManager.default.moveItem(at: partialURL, to: finalURL)
+        } catch {
+            try? FileManager.default.removeItem(at: partialURL)
+            throw BackupError.externalWriteFailed(
+                finalURL.lastPathComponent,
+                underlying: error.localizedDescription
+            )
+        }
 
         let finalBytes = fileSize(of: finalURL)
         guard finalBytes == localBytes, finalBytes > 0 else {
@@ -1242,4 +1229,37 @@ enum BackupError: LocalizedError {
         return finalBytes
     }
 
+    func cancelBackup() {
+        shouldCancel = true
+        status = "Stopping after the current file…"
+    }
+}
+
+enum BackupError: LocalizedError {
+    case cancelled
+    case noUsableResource
+    case emptyOutput(String)
+    case resourceReadFailed(String, underlying: String)
+    case externalWriteFailed(String, underlying: String)
+    case verificationFailed(String)
+    case metadataMergeFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .cancelled:
+            return "Backup was cancelled."
+        case .noUsableResource:
+            return "No usable Photos resource was found for this asset."
+        case .emptyOutput(let filename):
+            return "PhotoKit produced an empty file for \(filename)."
+        case .resourceReadFailed(let filename, let underlying):
+            return "Could not read \(filename): \(underlying)"
+        case .externalWriteFailed(let filename, let underlying):
+            return "Could not write \(filename) to the external drive: \(underlying)"
+        case .verificationFailed(let filename):
+            return "File verification failed for \(filename)."
+        case .metadataMergeFailed(let filename):
+            return "Could not create GPS-merged copy for \(filename)."
+        }
+    }
 }

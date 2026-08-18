@@ -1,0 +1,13 @@
+PhotoUSBBackup v2.8.1
+
+Base: clean v2.7 Fast-Skip-Dedup source.
+
+Fixes:
+- PhotoKit direct writes and requestData stream fallback now stage in FileManager.default.temporaryDirectory.
+- Completed local stage is copied to a USB .partial file.
+- USB .partial size must match local stage size.
+- USB .partial is renamed to final only after verification.
+- Final file size is rechecked.
+- Local staged file is removed after successful USB copy.
+- Added explicit external-write and verification errors.
+- Preserves v2.7 GPS reconciliation, dedup, fast skip, manifests, metadata-disputed folders, and reports.
