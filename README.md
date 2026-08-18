@@ -1,6 +1,6 @@
-# PhotoUSBBackup v2.7 — Fast Skip + Collision-Only Dedup
+# PhotoUSBBackup v2.7.1 — Local Stream Fix
 
-v2.7 is tuned for large libraries where many files are already backed up.
+v2.7.1 preserves the v2.7 fast-skip and collision-only dedup behavior and changes only PhotoKit staging: resources are staged in the app's local temporary directory, verified after PhotoKit completes, and then passed into the existing GPS, dedup, and finalization path.
 
 ## Performance strategy
 
@@ -46,7 +46,7 @@ This keeps strong duplicate protection without hashing thousands of routine file
 
 ## One-time filename index
 
-At backup start, v2.7 scans existing backup files once and builds an in-memory filename index.
+At backup start, v2.7.1 scans existing backup files once and builds an in-memory filename index.
 
 After that, same-name lookups are fast dictionary lookups instead of repeated recursive SSD scans.
 
@@ -83,13 +83,6 @@ The app does not automatically delete old `_1` / `_2` files.
 3. Keep the bundle ID unchanged:
    `com.paritosh.PhotoUSBBackup`
 4. GitHub -> Actions -> Build iPhone IPA.
-5. Download `PhotoUSBBackup-v2.7-unsigned-ipa`.
-6. Extract `PhotoUSBBackup-v2.7-unsigned.ipa`.
+5. Download `PhotoUSBBackup-v2.7.1-unsigned-ipa`.
+6. Extract `PhotoUSBBackup-v2.7.1-unsigned.ipa`.
 7. Install over the existing app through AltStore.
-
-
-## v2.8.1 local-staging compile fix
-
-This build starts again from the clean v2.7 source and preserves the v2.7 feature set. The PhotoKit staging directory is now the app's local temporary directory, not the external drive. After a resource is fully retrieved and verified locally, it is copied to `finalFilename.partial` on the USB drive, size-verified, then renamed to the final filename.
-
-This fixes the broken first v2.8 patch, which accidentally inserted helper methods into the `BackupError` enum and left the actual PhotoKit staging path on the USB drive.
