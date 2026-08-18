@@ -1,0 +1,21 @@
+name: PhotoUSBBackup
+options:
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "26.0"
+targets:
+  PhotoUSBBackup:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - PhotoUSBBackup
+    info:
+      path: PhotoUSBBackup/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.paritosh.PhotoUSBBackup
+        PRODUCT_NAME: PhotoUSBBackup
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
