@@ -19,6 +19,7 @@ final class BackupManager: ObservableObject {
 
     private var shouldCancel = false
     private var taskRegistered = false
+    private var activeRunID: UUID?
 
     private init() {
         refreshPermission()
@@ -80,7 +81,16 @@ final class BackupManager: ObservableObject {
                     }
                 }
 
-                await self.performBackup(continuedTask: continuedTask)
+                // v2.2 starts the user-requested copy immediately in the foreground.
+                // A delayed BG callback must never start a second copy.
+                if self.isRunning {
+                    self.status = "Backup running — background continuation attached."
+                    return
+                }
+
+                // If iOS launches the continued task after the foreground operation
+                // has already ended, there is no pending copy to duplicate.
+                continuedTask.setTaskCompleted(success: true)
             }
         }
     }
@@ -96,10 +106,25 @@ final class BackupManager: ObservableObject {
             return
         }
 
-        guard !isRunning else { return }
+        guard !isRunning else {
+            return
+        }
 
+        // Disable Start immediately. The previous build waited for the
+        // BGContinuedProcessingTask callback, which could leave the UI stuck.
+        isRunning = true
         shouldCancel = false
+        completedItems = 0
+        copiedFiles = 0
+        skippedFiles = 0
+        failedItems = []
 
+        let runID = UUID()
+        activeRunID = runID
+        status = "Reading Photos library…"
+
+        // Ask iOS for continued-processing eligibility, but never wait for its
+        // callback before starting the actual copy.
         let request = BGContinuedProcessingTaskRequest(
             identifier: Self.taskIdentifier,
             title: "Copying Original Photos",
@@ -109,33 +134,24 @@ final class BackupManager: ObservableObject {
 
         do {
             try BGTaskScheduler.shared.submit(request)
-            status = "Starting originals backup…"
         } catch {
-            status = "Background continuation unavailable; continuing while the app is active."
-            Task {
-                await performBackup(continuedTask: nil)
-            }
+            // Foreground copying still works if iOS declines background continuation.
+            status = "Starting backup (foreground continuation only)…"
+        }
+
+        Task {
+            await performBackup(runID: runID)
         }
     }
 
-    private func performBackup(
-        continuedTask: BGContinuedProcessingTask?
-    ) async {
+    private func performBackup(runID: UUID) async {
+        guard activeRunID == runID else { return }
+
         guard let destinationURL else {
-            continuedTask?.setTaskCompleted(success: false)
+            isRunning = false
+            activeRunID = nil
             return
         }
-
-        guard !isRunning else {
-            continuedTask?.setTaskCompleted(success: false)
-            return
-        }
-
-        isRunning = true
-        completedItems = 0
-        copiedFiles = 0
-        skippedFiles = 0
-        failedItems = []
 
         let hasSecurityAccess = destinationURL.startAccessingSecurityScopedResource()
 
@@ -143,7 +159,10 @@ final class BackupManager: ObservableObject {
             if hasSecurityAccess {
                 destinationURL.stopAccessingSecurityScopedResource()
             }
-            isRunning = false
+            if activeRunID == runID {
+                activeRunID = nil
+                isRunning = false
+            }
         }
 
         var manifest = loadManifest(from: destinationURL)
@@ -156,15 +175,12 @@ final class BackupManager: ObservableObject {
         let assets = PHAsset.fetchAssets(with: fetchOptions)
         totalItems = assets.count
 
-        continuedTask?.progress.totalUnitCount = Int64(max(assets.count, 1))
-        continuedTask?.progress.completedUnitCount = 0
 
         for index in 0..<assets.count {
             if shouldCancel {
                 saveManifest(manifest, to: destinationURL)
                 saveFailures(to: destinationURL)
                 status = "Stopped at \(completedItems) / \(totalItems). Run again to resume."
-                continuedTask?.setTaskCompleted(success: false)
                 return
             }
 
@@ -189,12 +205,7 @@ final class BackupManager: ObservableObject {
             }
 
             completedItems += 1
-            continuedTask?.progress.completedUnitCount = Int64(completedItems)
 
-            continuedTask?.updateTitle(
-                "Copying Original Photos",
-                subtitle: "\(completedItems) of \(totalItems) assets"
-            )
 
             status = "Backing up \(completedItems) / \(totalItems)"
         }
@@ -206,7 +217,6 @@ final class BackupManager: ObservableObject {
             ? "Backup complete — \(copiedFiles) copied, \(skippedFiles) skipped."
             : "Backup finished with \(failedItems.count) failed items. Run again to retry."
 
-        continuedTask?.setTaskCompleted(success: failedItems.isEmpty)
     }
 
     private func copyOriginalResources(

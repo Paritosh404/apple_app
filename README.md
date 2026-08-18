@@ -1,4 +1,4 @@
-# PhotoUSBBackup v2.1 — Originals Only
+# PhotoUSBBackup v2.2 — Originals Only
 
 This build fixes the Photos-permission crash by defining
 `NSPhotoLibraryUsageDescription` in both:
@@ -52,3 +52,21 @@ For the first test:
 - copy a small sample,
 - verify normal photos, videos, and Live Photos,
 - then run the full library.
+
+
+## v2.2 startup fix
+
+v2.2 no longer waits for `BGContinuedProcessingTask` to launch before copying.
+
+When **Start Originals Backup** is tapped:
+
+1. `isRunning` becomes true immediately, disabling the Start button.
+2. The Photos library is fetched immediately.
+3. The asset counter appears.
+4. Copying begins immediately in the foreground.
+5. A continued-processing request is submitted separately for background eligibility.
+6. A delayed background callback cannot start a duplicate transfer.
+
+This fixes the v2.1 symptom where the UI could remain on
+`Starting originals backup…` with no files copied while the Start button
+remained tappable.
