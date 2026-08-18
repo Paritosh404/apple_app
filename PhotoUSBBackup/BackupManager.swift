@@ -1,6 +1,7 @@
 import Foundation
 import Photos
 import BackgroundTasks
+import CoreLocation
 
 @MainActor
 final class BackupManager: ObservableObject {
@@ -11,6 +12,8 @@ final class BackupManager: ObservableObject {
     @Published var completedItems = 0
     @Published var totalItems = 0
     @Published var copiedFiles = 0
+    @Published var originalFiles = 0
+    @Published var fallbackFiles = 0
     @Published var skippedFiles = 0
     @Published var failedItems: [FailedItem] = []
     @Published var destinationURL: URL?
@@ -33,10 +36,7 @@ final class BackupManager: ObservableObject {
 
     func requestPhotoPermission() async {
         let authorization = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-
-        photoAccessGranted =
-            authorization == .authorized ||
-            authorization == .limited
+        photoAccessGranted = authorization == .authorized || authorization == .limited
 
         switch authorization {
         case .authorized:
@@ -81,15 +81,11 @@ final class BackupManager: ObservableObject {
                     }
                 }
 
-                // v2.2 starts the user-requested copy immediately in the foreground.
-                // A delayed BG callback must never start a second copy.
                 if self.isRunning {
                     self.status = "Backup running — background continuation attached."
                     return
                 }
 
-                // If iOS launches the continued task after the foreground operation
-                // has already ended, there is no pending copy to duplicate.
                 continuedTask.setTaskCompleted(success: true)
             }
         }
@@ -106,16 +102,14 @@ final class BackupManager: ObservableObject {
             return
         }
 
-        guard !isRunning else {
-            return
-        }
+        guard !isRunning else { return }
 
-        // Disable Start immediately. The previous build waited for the
-        // BGContinuedProcessingTask callback, which could leave the UI stuck.
         isRunning = true
         shouldCancel = false
         completedItems = 0
         copiedFiles = 0
+        originalFiles = 0
+        fallbackFiles = 0
         skippedFiles = 0
         failedItems = []
 
@@ -123,8 +117,6 @@ final class BackupManager: ObservableObject {
         activeRunID = runID
         status = "Reading Photos library…"
 
-        // Ask iOS for continued-processing eligibility, but never wait for its
-        // callback before starting the actual copy.
         let request = BGContinuedProcessingTaskRequest(
             identifier: Self.taskIdentifier,
             title: "Copying Original Photos",
@@ -132,12 +124,7 @@ final class BackupManager: ObservableObject {
         )
         request.strategy = .fail
 
-        do {
-            try BGTaskScheduler.shared.submit(request)
-        } catch {
-            // Foreground copying still works if iOS declines background continuation.
-            status = "Starting backup (foreground continuation only)…"
-        }
+        try? BGTaskScheduler.shared.submit(request)
 
         Task {
             await performBackup(runID: runID)
@@ -174,7 +161,7 @@ final class BackupManager: ObservableObject {
 
         let assets = PHAsset.fetchAssets(with: fetchOptions)
         totalItems = assets.count
-
+        status = "Found \(totalItems) Photos assets."
 
         for index in 0..<assets.count {
             if shouldCancel {
@@ -185,14 +172,17 @@ final class BackupManager: ObservableObject {
             }
 
             let asset = assets.object(at: index)
+            status = "Asset \(index + 1) / \(totalItems)"
 
             do {
-                let result = try await copyOriginalResources(
-                    for: asset,
+                let result = try await exportAsset(
+                    asset,
                     to: destinationURL,
                     manifest: &manifest
                 )
                 copiedFiles += result.copied
+                originalFiles += result.original
+                fallbackFiles += result.fallback
                 skippedFiles += result.skipped
             } catch {
                 failedItems.append(
@@ -206,171 +196,248 @@ final class BackupManager: ObservableObject {
 
             completedItems += 1
 
-
-            status = "Backing up \(completedItems) / \(totalItems)"
+            // Save frequently so a lock/crash loses minimal progress.
+            if completedItems % 20 == 0 {
+                saveManifest(manifest, to: destinationURL)
+                saveFailures(to: destinationURL)
+            }
         }
 
         saveManifest(manifest, to: destinationURL)
         saveFailures(to: destinationURL)
 
         status = failedItems.isEmpty
-            ? "Backup complete — \(copiedFiles) copied, \(skippedFiles) skipped."
-            : "Backup finished with \(failedItems.count) failed items. Run again to retry."
-
+            ? "Complete — \(originalFiles) original, \(fallbackFiles) fallback."
+            : "Finished — \(originalFiles) original, \(fallbackFiles) fallback, \(failedItems.count) failed."
     }
 
-    private func copyOriginalResources(
-        for asset: PHAsset,
+    private func exportAsset(
+        _ asset: PHAsset,
         to folder: URL,
         manifest: inout BackupManifest
-    ) async throws -> (copied: Int, skipped: Int) {
-        let resources = originalResources(for: asset)
+    ) async throws -> (copied: Int, original: Int, fallback: Int, skipped: Int) {
+        let groups = resourceCandidateGroups(for: asset)
 
         var copied = 0
+        var originalCount = 0
+        var fallbackCount = 0
         var skipped = 0
 
-        for resource in resources {
+        for group in groups {
             if shouldCancel { break }
 
-            let filename = safeFilename(resource.originalFilename)
-            let manifestKey = "\(asset.localIdentifier)|\(resource.type.rawValue)|\(filename)"
-            let finalURL = folder.appendingPathComponent(filename)
+            var exported = false
+            var lastError: Error?
 
-            if let entry = manifest.entries[manifestKey],
-               FileManager.default.fileExists(atPath: finalURL.path),
-               fileSize(of: finalURL) == entry.byteCount,
-               entry.byteCount > 0 {
-                skipped += 1
-                continue
-            }
+            for candidate in group {
+                let resource = candidate.resource
+                let originalName = safeFilename(resource.originalFilename)
+                let expectedFinalURL = folder.appendingPathComponent(originalName)
 
-            let actualFinalURL: URL
-
-            if FileManager.default.fileExists(atPath: finalURL.path) {
-                actualFinalURL = conflictSafeURL(for: finalURL)
-            } else {
-                actualFinalURL = finalURL
-            }
-
-            let partialURL = actualFinalURL.appendingPathExtension("partial")
-
-            if FileManager.default.fileExists(atPath: partialURL.path) {
-                try? FileManager.default.removeItem(at: partialURL)
-            }
-
-            let options = PHAssetResourceRequestOptions()
-            options.isNetworkAccessAllowed = true
-
-            try await writeResource(
-                resource,
-                to: partialURL,
-                options: options
-            )
-
-            let bytes = fileSize(of: partialURL)
-
-            guard bytes > 0 else {
-                try? FileManager.default.removeItem(at: partialURL)
-                throw BackupError.emptyOutput(filename)
-            }
-
-            try FileManager.default.moveItem(
-                at: partialURL,
-                to: actualFinalURL
-            )
-
-            let verifiedBytes = fileSize(of: actualFinalURL)
-
-            guard verifiedBytes == bytes, verifiedBytes > 0 else {
-                try? FileManager.default.removeItem(at: actualFinalURL)
-                throw BackupError.verificationFailed(actualFinalURL.lastPathComponent)
-            }
-
-            let key =
-                "\(asset.localIdentifier)|\(resource.type.rawValue)|\(actualFinalURL.lastPathComponent)"
-
-            let assetLocation: AssetLocation?
-            if let location = asset.location {
-                assetLocation = AssetLocation(
-                    latitude: location.coordinate.latitude,
-                    longitude: location.coordinate.longitude,
-                    altitude: location.verticalAccuracy >= 0 ? location.altitude : nil
+                let existingKey = manifestKey(
+                    asset: asset,
+                    resource: resource,
+                    filename: originalName
                 )
-            } else {
-                assetLocation = nil
-            }
 
-            manifest.entries[key] = ManifestEntry(
-                assetIdentifier: asset.localIdentifier,
-                filename: actualFinalURL.lastPathComponent,
-                byteCount: verifiedBytes,
-                completedAt: Date(),
-                creationDate: asset.creationDate,
-                location: assetLocation,
-                resourceType: resource.type.rawValue
-            )
+                if let entry = manifest.entries[existingKey],
+                   FileManager.default.fileExists(atPath: expectedFinalURL.path),
+                   fileSize(of: expectedFinalURL) == entry.byteCount,
+                   entry.byteCount > 0 {
+                    skipped += 1
+                    exported = true
+                    break
+                }
 
-            copied += 1
-        }
+                do {
+                    let result = try await exportResourceWithRetries(
+                        resource,
+                        asset: asset,
+                        preferredFinalURL: expectedFinalURL,
+                        folder: folder
+                    )
 
-        return (copied, skipped)
-    }
+                    let finalURL = result.finalURL
+                    let bytes = result.bytes
+                    let key = manifestKey(
+                        asset: asset,
+                        resource: resource,
+                        filename: finalURL.lastPathComponent
+                    )
 
-    private func originalResources(for asset: PHAsset) -> [PHAssetResource] {
-        let resources = PHAssetResource.assetResources(for: asset)
+                    manifest.entries[key] = ManifestEntry(
+                        assetIdentifier: asset.localIdentifier,
+                        filename: finalURL.lastPathComponent,
+                        byteCount: bytes,
+                        completedAt: Date(),
+                        creationDate: asset.creationDate,
+                        modificationDate: asset.modificationDate,
+                        location: archiveLocation(asset.location),
+                        resourceType: resource.type.rawValue,
+                        representation: candidate.representation,
+                        originalFilename: resource.originalFilename
+                    )
 
-        switch asset.mediaType {
-        case .image:
-            var selected: [PHAssetResource] = []
+                    try? writeXMPSidecar(
+                        for: asset,
+                        exportedFilename: finalURL.lastPathComponent,
+                        representation: candidate.representation,
+                        resourceType: resource.type.rawValue,
+                        to: folder
+                    )
 
-            // IMPORTANT: .photo is the original photo resource.
-            // .fullSizePhoto can represent the current/modified full-size rendition.
-            if let originalPhoto = resources.first(where: { $0.type == .photo }) {
-                selected.append(originalPhoto)
-            } else if let fallback = resources.first(where: { $0.type == .fullSizePhoto }) {
-                selected.append(fallback)
-            }
-
-            // Preserve original Live Photo motion resource.
-            if let pairedVideo = resources.first(where: { $0.type == .pairedVideo }) {
-                selected.append(pairedVideo)
-            }
-
-            // Preserve alternate original photo resources such as RAW when exposed.
-            for resource in resources {
-                if resource.type == .alternatePhoto &&
-                   !selected.contains(where: {
-                       $0.originalFilename == resource.originalFilename &&
-                       $0.type == resource.type
-                   }) {
-                    selected.append(resource)
+                    copied += 1
+                    if candidate.representation == .original {
+                        originalCount += 1
+                    } else {
+                        fallbackCount += 1
+                    }
+                    exported = true
+                    break
+                } catch {
+                    lastError = error
                 }
             }
 
-            return selected
+            if !exported {
+                throw lastError ?? BackupError.noUsableResource
+            }
+        }
+
+        return (copied, originalCount, fallbackCount, skipped)
+    }
+
+    private struct ResourceCandidate {
+        let resource: PHAssetResource
+        let representation: ExportRepresentation
+    }
+
+    // One group represents one logical component that should be exported.
+    // A Live Photo normally has a still-image group and a paired-video group.
+    private func resourceCandidateGroups(for asset: PHAsset) -> [[ResourceCandidate]] {
+        let resources = PHAssetResource.assetResources(for: asset)
+        var groups: [[ResourceCandidate]] = []
+
+        switch asset.mediaType {
+        case .image:
+            var stillCandidates: [ResourceCandidate] = []
+
+            if let r = resources.first(where: { $0.type == .photo }) {
+                stillCandidates.append(.init(resource: r, representation: .original))
+            }
+            if let r = resources.first(where: { $0.type == .adjustmentBasePhoto }) {
+                stillCandidates.append(.init(resource: r, representation: .adjustmentBase))
+            }
+            if let r = resources.first(where: { $0.type == .fullSizePhoto }) {
+                stillCandidates.append(.init(resource: r, representation: .renderedFallback))
+            }
+
+            if !stillCandidates.isEmpty {
+                groups.append(stillCandidates)
+            }
+
+            // Alternate photo (for example RAW/secondary source) is exported as its own component.
+            for alt in resources.filter({ $0.type == .alternatePhoto }) {
+                groups.append([
+                    .init(resource: alt, representation: .original)
+                ])
+            }
+
+            var liveCandidates: [ResourceCandidate] = []
+            if let r = resources.first(where: { $0.type == .pairedVideo }) {
+                liveCandidates.append(.init(resource: r, representation: .original))
+            }
+            if let r = resources.first(where: { $0.type == .fullSizePairedVideo }) {
+                liveCandidates.append(.init(resource: r, representation: .renderedFallback))
+            }
+            if !liveCandidates.isEmpty {
+                groups.append(liveCandidates)
+            }
 
         case .video:
-            // .video is the original video resource.
-            if let originalVideo = resources.first(where: { $0.type == .video }) {
-                return [originalVideo]
+            var videoCandidates: [ResourceCandidate] = []
+
+            if let r = resources.first(where: { $0.type == .video }) {
+                videoCandidates.append(.init(resource: r, representation: .original))
+            }
+            if let r = resources.first(where: { $0.type == .adjustmentBaseVideo }) {
+                videoCandidates.append(.init(resource: r, representation: .adjustmentBase))
+            }
+            if let r = resources.first(where: { $0.type == .fullSizeVideo }) {
+                videoCandidates.append(.init(resource: r, representation: .renderedFallback))
             }
 
-            if let fallback = resources.first(where: { $0.type == .fullSizeVideo }) {
-                return [fallback]
+            if !videoCandidates.isEmpty {
+                groups.append(videoCandidates)
             }
-
-            return []
 
         default:
-            return []
+            break
+        }
+
+        return groups
+    }
+
+    private func exportResourceWithRetries(
+        _ resource: PHAssetResource,
+        asset: PHAsset,
+        preferredFinalURL: URL,
+        folder: URL
+    ) async throws -> (finalURL: URL, bytes: Int64) {
+        let finalURL: URL
+        if FileManager.default.fileExists(atPath: preferredFinalURL.path) {
+            finalURL = conflictSafeURL(for: preferredFinalURL)
+        } else {
+            finalURL = preferredFinalURL
+        }
+
+        let partialURL = finalURL.appendingPathExtension("partial")
+        try? FileManager.default.removeItem(at: partialURL)
+
+        var lastError: Error?
+
+        // First try Apple's direct resource writer up to 3 times.
+        for attempt in 1...3 {
+            if shouldCancel { throw BackupError.cancelled }
+
+            do {
+                try await writeResourceDirect(resource, to: partialURL)
+                let bytes = try verifyAndFinalize(partialURL: partialURL, finalURL: finalURL)
+                return (finalURL, bytes)
+            } catch {
+                lastError = error
+                try? FileManager.default.removeItem(at: partialURL)
+
+                if attempt < 3 {
+                    // 0.8s, then 1.6s.
+                    let delay = UInt64(attempt) * 800_000_000
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+            }
+        }
+
+        // Direct write can return generic PHPhotosErrorDomain -1 for some
+        // iCloud-backed resources. Stream requestData into our own file as fallback.
+        do {
+            try await streamResource(resource, to: partialURL)
+            let bytes = try verifyAndFinalize(partialURL: partialURL, finalURL: finalURL)
+            return (finalURL, bytes)
+        } catch {
+            try? FileManager.default.removeItem(at: partialURL)
+            throw BackupError.resourceReadFailed(
+                resource.originalFilename,
+                underlying: "\(lastError?.localizedDescription ?? "direct write failed"); stream fallback: \(error.localizedDescription)"
+            )
         }
     }
 
-    private func writeResource(
+    private func writeResourceDirect(
         _ resource: PHAssetResource,
-        to url: URL,
-        options: PHAssetResourceRequestOptions
+        to url: URL
     ) async throws {
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = true
+
         try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Void, Error>) in
 
@@ -388,6 +455,144 @@ final class BackupManager: ObservableObject {
         }
     }
 
+    private func streamResource(
+        _ resource: PHAssetResource,
+        to url: URL
+    ) async throws {
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = true
+
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
+
+            var writeError: Error?
+
+            PHAssetResourceManager.default().requestData(
+                for: resource,
+                options: options
+            ) { data in
+                guard writeError == nil else { return }
+                do {
+                    try handle.write(contentsOf: data)
+                } catch {
+                    writeError = error
+                }
+            } completionHandler: { error in
+                do { try handle.close() } catch {
+                    if writeError == nil { writeError = error }
+                }
+
+                if let writeError {
+                    continuation.resume(throwing: writeError)
+                } else if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    private func verifyAndFinalize(
+        partialURL: URL,
+        finalURL: URL
+    ) throws -> Int64 {
+        let bytes = fileSize(of: partialURL)
+        guard bytes > 0 else {
+            throw BackupError.emptyOutput(partialURL.lastPathComponent)
+        }
+
+        try FileManager.default.moveItem(at: partialURL, to: finalURL)
+
+        let finalBytes = fileSize(of: finalURL)
+        guard finalBytes == bytes, finalBytes > 0 else {
+            try? FileManager.default.removeItem(at: finalURL)
+            throw BackupError.verificationFailed(finalURL.lastPathComponent)
+        }
+
+        return finalBytes
+    }
+
+    private func archiveLocation(_ location: CLLocation?) -> AssetLocation? {
+        guard let location else { return nil }
+
+        return AssetLocation(
+            latitude: location.coordinate.latitude,
+            longitude: location.coordinate.longitude,
+            altitude: location.verticalAccuracy >= 0 ? location.altitude : nil,
+            horizontalAccuracy: location.horizontalAccuracy >= 0 ? location.horizontalAccuracy : nil,
+            verticalAccuracy: location.verticalAccuracy >= 0 ? location.verticalAccuracy : nil
+        )
+    }
+
+    // We intentionally do not inject GPS into HEIC/JPEG/MOV because doing so
+    // would modify the "unmodified original". Instead, save standard XMP GPS
+    // metadata next to each exported component.
+    private func writeXMPSidecar(
+        for asset: PHAsset,
+        exportedFilename: String,
+        representation: ExportRepresentation,
+        resourceType: Int,
+        to folder: URL
+    ) throws {
+        let location = asset.location
+        let latitude = location.map { String(format: "%.8f", $0.coordinate.latitude) } ?? ""
+        let longitude = location.map { String(format: "%.8f", $0.coordinate.longitude) } ?? ""
+        let altitude = location.flatMap {
+            $0.verticalAccuracy >= 0 ? String(format: "%.3f", $0.altitude) : nil
+        } ?? ""
+
+        let dateFormatter = ISO8601DateFormatter()
+        let created = asset.creationDate.map { dateFormatter.string(from: $0) } ?? ""
+        let modified = asset.modificationDate.map { dateFormatter.string(from: $0) } ?? ""
+
+        let escapedFilename = xmlEscape(exportedFilename)
+
+        let xmp = """
+        <?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        <x:xmpmeta xmlns:x="adobe:ns:meta/">
+          <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description
+              xmlns:exif="http://ns.adobe.com/exif/1.0/"
+              xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+              xmlns:photos="https://example.invalid/photousbbackup/1.0/"
+              exif:GPSLatitude="\(latitude)"
+              exif:GPSLongitude="\(longitude)"
+              exif:GPSAltitude="\(altitude)"
+              xmp:CreateDate="\(created)"
+              xmp:ModifyDate="\(modified)"
+              photos:AssetLocalIdentifier="\(xmlEscape(asset.localIdentifier))"
+              photos:ExportedFilename="\(escapedFilename)"
+              photos:Representation="\(representation.rawValue)"
+              photos:ResourceType="\(resourceType)" />
+          </rdf:RDF>
+        </x:xmpmeta>
+        <?xpacket end="w"?>
+        """
+
+        let sidecarURL = folder.appendingPathComponent(exportedFilename + ".xmp")
+        try Data(xmp.utf8).write(to: sidecarURL, options: .atomic)
+    }
+
+    private func xmlEscape(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    private func manifestKey(
+        asset: PHAsset,
+        resource: PHAssetResource,
+        filename: String
+    ) -> String {
+        "\(asset.localIdentifier)|\(resource.type.rawValue)|\(filename)"
+    }
+
     private func safeFilename(_ filename: String) -> String {
         let invalid = CharacterSet(charactersIn: "/:\\")
         return filename.components(separatedBy: invalid).joined(separator: "_")
@@ -399,18 +604,14 @@ final class BackupManager: ObservableObject {
         let stem = original.deletingPathExtension().lastPathComponent
 
         var counter = 1
-
         while true {
             let name = ext.isEmpty
                 ? "\(stem)_\(counter)"
                 : "\(stem)_\(counter).\(ext)"
-
             let candidate = folder.appendingPathComponent(name)
-
             if !FileManager.default.fileExists(atPath: candidate.path) {
                 return candidate
             }
-
             counter += 1
         }
     }
@@ -453,9 +654,7 @@ final class BackupManager: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
-        guard let data = try? encoder.encode(manifest) else {
-            return
-        }
+        guard let data = try? encoder.encode(manifest) else { return }
 
         try? data.write(
             to: manifestURL(in: folder),
@@ -467,9 +666,7 @@ final class BackupManager: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
-        guard let data = try? encoder.encode(failedItems) else {
-            return
-        }
+        guard let data = try? encoder.encode(failedItems) else { return }
 
         try? data.write(
             to: folder.appendingPathComponent(failuresFilename),
@@ -484,16 +681,24 @@ final class BackupManager: ObservableObject {
 }
 
 enum BackupError: LocalizedError {
+    case cancelled
+    case noUsableResource
     case emptyOutput(String)
     case verificationFailed(String)
+    case resourceReadFailed(String, underlying: String)
 
     var errorDescription: String? {
         switch self {
+        case .cancelled:
+            return "Backup was cancelled."
+        case .noUsableResource:
+            return "No usable Photos resource was found for this asset."
         case .emptyOutput(let filename):
             return "PhotoKit produced an empty file for \(filename)."
-
         case .verificationFailed(let filename):
             return "File-size verification failed for \(filename)."
+        case .resourceReadFailed(let filename, let underlying):
+            return "Could not read \(filename): \(underlying)"
         }
     }
 }

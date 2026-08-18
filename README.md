@@ -1,96 +1,85 @@
-# PhotoUSBBackup v2.3 — Originals Only
+# PhotoUSBBackup v2.4 — Originals + GPS
 
-This build fixes the Photos-permission crash by defining
-`NSPhotoLibraryUsageDescription` in both:
+This build focuses on two goals:
 
-1. `project.yml` through XcodeGen `info.properties`
-2. the physical `PhotoUSBBackup/Info.plist`
+1. Preserve the best available **unmodified/original Photos resource**.
+2. Preserve **GPS and capture-date metadata** even when Photos stores that metadata separately from the file bytes.
 
-The GitHub Actions workflow also verifies the privacy key twice:
-- before compilation
-- inside the final built `.app`
+## Resource strategy
 
-If either check fails, the workflow stops instead of producing a broken IPA.
+Photo:
+1. `.photo` — original
+2. `.adjustmentBasePhoto` — fallback when available
+3. `.fullSizePhoto` — last-resort rendered fallback
 
-## Main features
+Video:
+1. `.video` — original
+2. `.adjustmentBaseVideo` — fallback when available
+3. `.fullSizeVideo` — last-resort rendered fallback
 
-- Exports unmodified Photos originals using PhotoKit.
-- Prefers `fullSizePhoto` / `fullSizeVideo`.
-- Includes Live Photo paired video.
-- Includes alternate photo resources when exposed by Photos.
-- Allows iCloud originals to download.
-- Uses `.partial` writes.
-- Renames only after successful completion.
-- Verifies output file size.
-- Keeps a resume manifest on the destination drive.
-- Preserves unrelated existing files rather than overwriting them.
-- Logs failed items.
-- Uses iOS 26 continued-processing support where available.
+Live Photo:
+- still-image chain above
+- `.pairedVideo` first
+- `.fullSizePairedVideo` as fallback
 
-## Build from Windows
+Alternate photo resources are exported separately.
 
-1. Extract this ZIP.
-2. Create or update your GitHub repository.
-3. Upload all project contents, including `.github`.
-4. Open GitHub → Actions.
-5. Run **Build iPhone IPA**.
-6. Wait for all steps to turn green.
-7. Download artifact:
-   `PhotoUSBBackup-v2.1-unsigned-ipa`
-8. Extract it to get:
-   `PhotoUSBBackup-v2.1-unsigned.ipa`
-9. Sideload through AltStore.
+## PHPhotosErrorDomain -1 resilience
 
-## Important
+Each resource is attempted with PhotoKit `writeData` up to 3 times.
+If that still fails, v2.4 uses `requestData` and streams the resource into the `.partial` file.
 
-Delete the previous crashing build from the iPhone before installing v2.1.
+`isNetworkAccessAllowed = true` is enabled for both methods so iCloud-backed originals can be downloaded.
 
-On first launch, tap **Allow Photos Access**. iOS should now show the system Photos-permission dialog instead of terminating the app.
+## GPS preservation
 
-For the first test:
-- use a fresh test folder on the USB/SSD,
-- copy a small sample,
-- verify normal photos, videos, and Live Photos,
-- then run the full library.
+The actual HEIC/JPEG/RAW/MOV file is never rewritten, because injecting GPS into it would change the original bytes.
 
+Instead, each exported file receives a sibling `.xmp` sidecar:
 
-## v2.2 startup fix
+`IMG_1234.HEIC`
+`IMG_1234.HEIC.xmp`
 
-v2.2 no longer waits for `BGContinuedProcessingTask` to launch before copying.
-
-When **Start Originals Backup** is tapped:
-
-1. `isRunning` becomes true immediately, disabling the Start button.
-2. The Photos library is fetched immediately.
-3. The asset counter appears.
-4. Copying begins immediately in the foreground.
-5. A continued-processing request is submitted separately for background eligibility.
-6. A delayed background callback cannot start a duplicate transfer.
-
-This fixes the v2.1 symptom where the UI could remain on
-`Starting originals backup…` with no files copied while the Start button
-remained tappable.
-
-
-## v2.3 metadata/original-resource correction
-
-v2.3 changes resource selection to match the goal of **Export Unmodified Originals**:
-
-- Photos prefer `PHAssetResourceType.photo`
-- Videos prefer `PHAssetResourceType.video`
-- Live Photos export the original `.photo` plus `.pairedVideo`
-- `fullSizePhoto` / `fullSizeVideo` are fallback-only
-- Alternate photo resources (for example RAW/alternate originals when exposed by Photos) are preserved
-
-The destination manifest now also stores archival Photos-library metadata for every copied resource:
-
-- Photos local identifier
-- original/final filename
-- file size
-- creation date
+The sidecar stores:
 - latitude
 - longitude
 - altitude when available
-- resource type
+- Photos creation date
+- Photos modification date
+- Photos local asset identifier
+- exported resource type
+- whether the exported resource was `original`, `adjustmentBase`, or `renderedFallback`
 
-This means location information remains available in the manifest even when a particular original file does not contain embedded GPS metadata.
+The same data is also stored in `.PhotoUSBBackup-manifest.json`.
+
+This gives you the original file plus a separate archival record of Photos-library GPS.
+
+## Resume and safety
+
+- writes go to `.partial` first
+- completed files are size-verified
+- manifest is saved every 20 assets
+- existing verified files are skipped
+- unrelated existing files are not overwritten
+- failure details go to `PhotoUSBBackup-failures.json`
+
+## Build on Windows
+
+1. Extract this ZIP.
+2. Upload all project contents to the existing GitHub repo.
+3. Keep the same bundle ID: `com.paritosh.PhotoUSBBackup`.
+4. GitHub → Actions → **Build iPhone IPA** → Run workflow.
+5. Download `PhotoUSBBackup-v2.4-unsigned-ipa`.
+6. Extract `PhotoUSBBackup-v2.4-unsigned.ipa`.
+7. Install it over your existing app through AltStore.
+
+Do not change the bundle ID between versions.
+
+## How to judge the result
+
+The app reports:
+- `original` — preferred original resource succeeded
+- `fallback` — original could not be retrieved and an adjustment-base/rendered resource was used
+- `failed` — no candidate resource could be exported
+
+For an archival backup, inspect the counts after the run. A high fallback count means the library/device could not provide many original resources at that time.

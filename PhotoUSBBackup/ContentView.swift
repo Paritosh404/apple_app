@@ -8,14 +8,14 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 20) {
+                VStack(spacing: 18) {
                     Image(systemName: "externaldrive.badge.checkmark")
-                        .font(.system(size: 64))
+                        .font(.system(size: 60))
 
-                    Text("Originals Backup")
+                    Text("Originals + GPS Backup")
                         .font(.largeTitle.bold())
 
-                    Text("Copies unmodified originals from Photos to an external USB/SSD.")
+                    Text("Copies the best available original resource without modifying it, and writes Photos-library GPS/date metadata to XMP sidecars.")
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
 
@@ -31,9 +31,17 @@ struct ContentView: View {
                         HStack {
                             Text("\(backup.completedItems) / \(backup.totalItems) assets")
                             Spacer()
-                            Text("\(backup.copiedFiles) files copied")
+                            Text("\(backup.copiedFiles) files")
                         }
                         .font(.subheadline)
+
+                        HStack {
+                            Text("\(backup.originalFiles) original")
+                            Spacer()
+                            Text("\(backup.fallbackFiles) fallback")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
                         HStack {
                             Text("\(backup.skippedFiles) skipped")
@@ -47,9 +55,7 @@ struct ContentView: View {
                     Divider()
 
                     Button {
-                        Task {
-                            await backup.requestPhotoPermission()
-                        }
+                        Task { await backup.requestPhotoPermission() }
                     } label: {
                         Label(
                             backup.photoAccessGranted ? "Photos Access Granted" : "Allow Photos Access",
@@ -72,22 +78,22 @@ struct ContentView: View {
                     .buttonStyle(.bordered)
 
                     if let destination = backup.destinationURL {
-                        VStack(spacing: 4) {
+                        VStack(spacing: 3) {
                             Text("Destination")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-
                             Text(destination.lastPathComponent)
                                 .font(.headline)
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("Unmodified originals only", systemImage: "checkmark.seal.fill")
-                        Label("Includes Live Photo paired video", systemImage: "livephoto")
-                        Label("Downloads iCloud originals when needed", systemImage: "icloud.and.arrow.down")
-                        Label("Uses .partial files for safe resume", systemImage: "arrow.clockwise")
-                        Label("Verifies completed files by size", systemImage: "checkmark.shield")
+                    VStack(alignment: .leading, spacing: 7) {
+                        Label("Original .photo / .video first", systemImage: "checkmark.seal.fill")
+                        Label("3 retries for PhotoKit resource errors", systemImage: "arrow.clockwise")
+                        Label("Streaming requestData fallback", systemImage: "arrow.down.doc")
+                        Label("Live Photo still + paired video", systemImage: "livephoto")
+                        Label("GPS/date saved to .xmp sidecars", systemImage: "location")
+                        Label("Original file bytes remain untouched", systemImage: "lock.shield")
                     }
                     .font(.subheadline)
 
@@ -135,8 +141,7 @@ struct ContentView: View {
                 NavigationStack {
                     List(backup.failedItems) { item in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(item.filename)
-                                .font(.headline)
+                            Text(item.filename).font(.headline)
                             Text(item.reason)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
