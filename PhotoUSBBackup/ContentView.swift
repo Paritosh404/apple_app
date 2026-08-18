@@ -40,6 +40,14 @@ struct ContentView: View {
                             Spacer()
                             Text("\(backup.failedItems.count) failed")
                         }.font(.caption).foregroundStyle(.secondary)
+
+                        HStack {
+                            Text("\(backup.adoptedFiles) adopted")
+                            Spacer()
+                            Text("\(backup.conflictFiles) true conflicts")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
 
                     Divider()

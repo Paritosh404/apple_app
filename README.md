@@ -1,9 +1,88 @@
-# PhotoUSBBackup v2.6 — Dedup + Resume Repair
+# PhotoUSBBackup v2.7 — Fast Skip + Collision-Only Dedup
 
-This build keeps the v2.5 original-resource and GPS reconciliation design and fixes resume-created duplicates.
+v2.7 is tuned for large libraries where many files are already backed up.
 
-Before creating `_1`, `_2`, etc., v2.6 recursively searches the selected backup for the same original filename, filters by exact file size, and then compares SHA-256. If the bytes match, it adopts the existing file into the manifest and skips the new copy. A numbered filename is created only when same-name content is genuinely different.
+## Performance strategy
 
-The manifest and duplicate report are saved after every processed asset. Duplicate decisions are written to `PhotoUSBBackup-duplicate-report.json`. Existing `_1`/`_2` files are never automatically deleted.
+### Fast path: known completed files
 
-The bundle identifier remains `com.paritosh.PhotoUSBBackup`. Build through the included GitHub Actions workflow and install `PhotoUSBBackup-v2.6-unsigned.ipa` over the existing AltStore app.
+For each Photos resource, v2.7 checks the manifest first.
+
+If:
+- asset identifier matches,
+- resource type matches,
+- recorded file exists,
+- file size matches,
+
+the resource is skipped immediately.
+
+No PhotoKit fetch.
+No staging.
+No recursive search.
+No SHA-256.
+
+### New files
+
+If the manifest does not know the resource and there is no same-name file in the destination index:
+
+- fetch original,
+- copy normally,
+- record file size/path,
+- no SHA-256.
+
+### Collision-only verification
+
+SHA-256 is used only when a same-name file already exists and the app would otherwise create `_1`, `_2`, etc.
+
+Process:
+
+1. compare byte sizes,
+2. if size differs -> genuine conflict,
+3. if size matches -> hash staged file and same-name candidate,
+4. identical -> adopt existing file + skip,
+5. different -> create `_1`, `_2`, etc.
+
+This keeps strong duplicate protection without hashing thousands of routine files.
+
+## One-time filename index
+
+At backup start, v2.7 scans existing backup files once and builds an in-memory filename index.
+
+After that, same-name lookups are fast dictionary lookups instead of repeated recursive SSD scans.
+
+Newly created files are added to the index immediately.
+
+## Resume
+
+Manifest is saved every 5 processed assets and again on stop/completion.
+
+## GPS/original logic retained
+
+- `.photo` / `.video` original resources first
+- retries + `requestData` streaming fallback
+- iCloud network access
+- Live Photo paired resource handling
+- GPS comparison
+- `Originals/`
+- `Metadata-Disputed/Original/`
+- `Metadata-Disputed/GPS-Merged/`
+- XMP fallback for unsupported merge formats
+
+## Duplicate report
+
+Collision decisions are recorded in:
+
+`PhotoUSBBackup-duplicate-report.json`
+
+The app does not automatically delete old `_1` / `_2` files.
+
+## Windows build
+
+1. Extract the ZIP.
+2. Upload all project contents over your existing GitHub repo.
+3. Keep the bundle ID unchanged:
+   `com.paritosh.PhotoUSBBackup`
+4. GitHub -> Actions -> Build iPhone IPA.
+5. Download `PhotoUSBBackup-v2.7-unsigned-ipa`.
+6. Extract `PhotoUSBBackup-v2.7-unsigned.ipa`.
+7. Install over the existing app through AltStore.
