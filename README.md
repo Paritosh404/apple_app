@@ -1,4 +1,4 @@
-# PhotoUSBBackup v3.2 — Album Copy
+# PhotoUSBBackup v3.7.5 — Album Copy
 
 This is a simplified branch focused on copying the Photos album/folder structure already organized on the iPhone to an external USB/SSD.
 
@@ -6,8 +6,8 @@ This is a simplified branch focused on copying the Photos album/folder structure
 
 - Select a top-level user album or Photos folder.
 - Recursively recreate nested Photos folder/album structure on USB.
-- Prefer the current full-size Photos rendition (`fullSizePhoto` / `fullSizeVideo`).
-- Fall back to the ordinary photo/video resource when needed.
+- Copy the original Photos resource (`photo` / `video`) so edited or rendered versions are not substituted in a backup.
+- Fall back to the adjustment base and then the current full-size rendition only when Photos does not expose the original resource.
 - Allow iCloud download.
 - Stage one asset at a time in the app's local temporary directory.
 - Copy to `filename.partial` on USB first.
@@ -21,6 +21,49 @@ This is a simplified branch focused on copying the Photos album/folder structure
 Photos albums are references, not physical storage folders. If one photo appears in multiple albums, it will be copied into each corresponding USB album folder.
 
 This branch intentionally does not perform the old GPS reconciliation, RAW/original recovery, metadata-dispute folders, or SHA-256 dedup logic. The priority is reliable copying of the already-organized album structure.
+
+## v3.7 background Wi-Fi transfers
+
+- Wi-Fi assets are staged into durable Application Support storage before upload.
+- A persistent background `URLSession` hands file uploads to iOS so queued transfers can continue when another app is opened or the screen locks.
+- The same receiver `/health`, `/check`, and `/upload` protocol is preserved; no PC receiver update is required.
+- Active tasks are restored when iOS relaunches the app after normal system termination.
+- The transfer screen separately displays preparation progress, current-file bytes, saved, queued, skipped, and failed totals.
+- Pausing stops new preparation while uploads already handed to iOS continue safely.
+
+iOS cancels background transfers if the user explicitly swipes the app away from the app switcher. Reopen Album Copy and use Resume Transfer after a force quit.
+
+### v3.7.1 progress-screen fixes
+
+- Finished preparation now shows **Uploads Running** instead of exposing a Resume button while queued uploads are active.
+- Resume is available only when preparation actually stopped before reaching the end of the selected source.
+- Fast-changing filenames stay on one fixed-height, middle-truncated line, and status text reserves a stable height so the transfer screen no longer jumps.
+
+### v3.7.2 queue controls
+
+- **Pause All Operations** suspends queued background upload tasks and stops further photo preparation without deleting staged files.
+- **Resume All Operations** resumes the same upload tasks and continues incomplete preparation.
+- **Stop Transfer and Clear Queue** requires confirmation, cancels queued tasks, and removes only their staged app files; completed files on the PC remain untouched.
+- User-cancelled task callbacks are excluded from the failed counter.
+
+### v3.7.3 accurate transfer indicator
+
+- The main progress bar now counts only files newly saved on the PC plus same-size files verified as already present.
+- Photo preparation and queued background uploads are displayed as separate values, so completing preparation can no longer make the transfer appear finished.
+- The progress screen uses the same **Complete on PC** definition and does not count failed files as successful completion.
+
+### v3.7.4 true preparation resume
+
+- Each processed item is tracked by its Photos album identifier plus asset identifier for the lifetime of the transfer.
+- Resume skips those identifiers before staging or checking the receiver, instead of rereading the selected source from item 1.
+- The prepared counter is derived from the unique processed-item set and cannot exceed the selected-source total.
+- Choosing a different source, starting a genuinely new transfer, or confirming Stop clears the resume set.
+
+### v3.7.5 original media and size integrity
+
+- Photo and video staging now explicitly selects the original Photos resource before any adjusted or rendered resource.
+- The PC receiver continues to accept a file only after the received byte count exactly matches the staged source byte count.
+- Compare exact byte counts when checking sizes. iPhone commonly displays decimal GB while Windows displays binary GiB values but labels them GB; for example, 6.4 billion bytes is about 5.96 GiB.
 
 ## Windows build
 
