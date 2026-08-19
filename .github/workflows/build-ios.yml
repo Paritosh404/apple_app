@@ -19,6 +19,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Prepare PhotoUSB app icon
+        run: |
+          python3 -c "import base64,pathlib; p=pathlib.Path('PhotoUSBBackup/Assets.xcassets/AppIcon.appiconset/AppIcon-source.jpg.b64'); p.with_name('AppIcon-source.jpg').write_bytes(base64.b64decode(p.read_text()))"
+          sips -s format png -z 1024 1024 PhotoUSBBackup/Assets.xcassets/AppIcon.appiconset/AppIcon-source.jpg --out PhotoUSBBackup/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+
       - name: Generate Xcode project
         run: xcodegen generate
 
@@ -42,9 +47,9 @@ jobs:
           APP_PATH="build/Build/Products/Release-iphoneos/PhotoUSBBackup.app"
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          /usr/bin/zip -qry PhotoUSBBackup-v3.5-Background-Resume-WiFi-unsigned.ipa Payload
+          /usr/bin/zip -qry PhotoUSBBackup-v3.6-QR-Icon-WiFi-unsigned.ipa Payload
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PhotoUSBBackup-v3.5-Background-Resume-WiFi-unsigned-ipa
-          path: PhotoUSBBackup-v3.5-Background-Resume-WiFi-unsigned.ipa
+          name: PhotoUSBBackup-v3.6-QR-Icon-WiFi-unsigned-ipa
+          path: PhotoUSBBackup-v3.6-QR-Icon-WiFi-unsigned.ipa
