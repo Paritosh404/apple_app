@@ -1,5 +1,6 @@
 import Foundation
 import Photos
+import UIKit
 
 @MainActor
 final class AlbumCopyManager: ObservableObject {
@@ -16,6 +17,7 @@ final class AlbumCopyManager: ObservableObject {
     @Published var stats = CopyStats()
     @Published var failures: [CopyFailure] = []
     private var shouldStop = false
+    private var backgroundTaskID:UIBackgroundTaskIdentifier = .invalid
     private lazy var wifiSession: URLSession = {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 3600
@@ -71,7 +73,30 @@ final class AlbumCopyManager: ObservableObject {
     func startCopy() {
         guard canStart, let source = selectedSource else { return }
         isRunning = true; shouldStop = false; stats = CopyStats(); failures = []
-        Task { await run(source); isRunning = false }
+        beginBackgroundTransfer()
+        Task {
+            await run(source)
+            endBackgroundTransfer()
+            isRunning = false
+        }
+    }
+
+    private func beginBackgroundTransfer() {
+        endBackgroundTransfer()
+        UIApplication.shared.isIdleTimerDisabled = true
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "PhotoUSB Wi-Fi Transfer") { [weak self] in
+            guard let self else { return }
+            self.status = "Background time expired — reopen the app and run again to resume."
+            self.shouldStop = true
+            self.endBackgroundTransfer()
+        }
+    }
+
+    private func endBackgroundTransfer() {
+        UIApplication.shared.isIdleTimerDisabled = false
+        guard backgroundTaskID != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTaskID)
+        backgroundTaskID = .invalid
     }
 
     private func run(_ source: PhotoTreeNode) async {
