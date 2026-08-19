@@ -1,4 +1,4 @@
-# PhotoUSBBackup v3.2 — Album Copy
+# PhotoUSBBackup v3.7 — Album Copy
 
 This is a simplified branch focused on copying the Photos album/folder structure already organized on the iPhone to an external USB/SSD.
 
@@ -21,6 +21,17 @@ This is a simplified branch focused on copying the Photos album/folder structure
 Photos albums are references, not physical storage folders. If one photo appears in multiple albums, it will be copied into each corresponding USB album folder.
 
 This branch intentionally does not perform the old GPS reconciliation, RAW/original recovery, metadata-dispute folders, or SHA-256 dedup logic. The priority is reliable copying of the already-organized album structure.
+
+## v3.7 background Wi-Fi transfers
+
+- Wi-Fi assets are staged into durable Application Support storage before upload.
+- A persistent background `URLSession` hands file uploads to iOS so queued transfers can continue when another app is opened or the screen locks.
+- The same receiver `/health`, `/check`, and `/upload` protocol is preserved; no PC receiver update is required.
+- Active tasks are restored when iOS relaunches the app after normal system termination.
+- The transfer screen separately displays preparation progress, current-file bytes, saved, queued, skipped, and failed totals.
+- Pausing stops new preparation while uploads already handed to iOS continue safely.
+
+iOS cancels background transfers if the user explicitly swipes the app away from the app switcher. Reopen Album Copy and use Resume Transfer after a force quit.
 
 ## Windows build
 

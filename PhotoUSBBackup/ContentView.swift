@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var showAlbumPicker = false
     @State private var showFailures = false
     @State private var showQRScanner = false
+    @State private var showTransferScreen = false
 
     var body: some View {
         NavigationStack {
@@ -46,10 +47,18 @@ struct ContentView: View {
                             Text("Example: 192.168.1.20 : 8765").font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    Button { manager.startCopy() } label: {
-                        Label(manager.isRunning ? "Transfer Running…" : (manager.stats.processedAssets > 0 ? "Resume Transfer" : "Start Transfer"), systemImage: "arrow.right.circle.fill").frame(maxWidth: .infinity)
+                    Button {
+                        manager.startCopy()
+                        showTransferScreen = true
+                    } label: {
+                        Label(manager.isPreparing ? "Preparing Transfer…" : (manager.stats.processedAssets > 0 ? "Resume Transfer" : "Start Transfer"), systemImage: "arrow.right.circle.fill").frame(maxWidth: .infinity)
                     }.buttonStyle(.borderedProminent).disabled(!manager.canStart)
-                    if manager.isRunning { Button(role: .destructive) { manager.stopCopy() } label: { Label("Stop After Current File", systemImage: "stop.circle") } }
+                    if manager.isRunning {
+                        Button { showTransferScreen = true } label: {
+                            Label("Show Transfer Progress", systemImage: "chart.bar.fill").frame(maxWidth: .infinity)
+                        }.buttonStyle(.bordered)
+                    }
+                    if manager.isPreparing { Button(role: .destructive) { manager.stopCopy() } label: { Label("Pause Preparation", systemImage: "pause.circle") } }
                     if !manager.failures.isEmpty { Button { showFailures = true } label: { Label("Show Recent Failures", systemImage: "exclamationmark.triangle") } }
                 }.padding()
             }
@@ -76,6 +85,180 @@ struct ContentView: View {
             .sheet(isPresented: $showFailures) {
                 NavigationStack { List(manager.failures) { failure in VStack(alignment: .leading, spacing: 4) { Text(failure.path).font(.headline); Text(failure.reason).font(.caption).foregroundStyle(.secondary) } }.navigationTitle("Recent Failures") }
             }
+            .fullScreenCover(isPresented: $showTransferScreen) {
+                TransferProgressView(isPresented: $showTransferScreen)
+                    .environmentObject(manager)
+            }
+            .onAppear {
+                if manager.isRunning { showTransferScreen = true }
+            }
+            .onChange(of: manager.isRunning) { _, running in
+                if running { showTransferScreen = true }
+            }
         }
+    }
+}
+
+private struct TransferProgressView: View {
+    @EnvironmentObject private var manager: AlbumCopyManager
+    @Binding var isPresented: Bool
+    @State private var showFailures = false
+
+    private var finishedCount: Int {
+        manager.stats.copiedFiles + manager.stats.skippedFiles + manager.stats.failedFiles
+    }
+
+    private var overallProgress: Double {
+        guard manager.stats.totalAssets > 0 else { return 0 }
+        return min(1, Double(finishedCount) / Double(manager.stats.totalAssets))
+    }
+
+    private var fileProgress: Double {
+        guard manager.currentBytesExpected > 0 else { return 0 }
+        return min(1, Double(manager.currentBytesSent) / Double(manager.currentBytesExpected))
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 24) {
+                    ZStack {
+                        Circle().fill(.blue.opacity(0.12)).frame(width: 112, height: 112)
+                        Image(systemName: manager.transferMode == .wifi ? "wifi.circle.fill" : "externaldrive.fill")
+                            .font(.system(size: 64))
+                            .foregroundStyle(.blue)
+                    }
+
+                    VStack(spacing: 8) {
+                        Text(manager.isRunning ? "Transfer in Progress" : "Transfer Summary")
+                            .font(.largeTitle.bold())
+                            .multilineTextAlignment(.center)
+                        Text(manager.status)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Overall").font(.headline)
+                            Spacer()
+                            Text("\(finishedCount) of \(manager.stats.totalAssets)")
+                                .font(.subheadline.monospacedDigit())
+                        }
+                        ProgressView(value: overallProgress)
+                            .tint(.blue)
+                            .scaleEffect(x: 1, y: 1.8)
+                    }
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+
+                    if manager.isPreparing {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Preparing photos and videos", systemImage: "photo.stack")
+                                .font(.headline)
+                            ProgressView(
+                                value: Double(manager.stats.processedAssets),
+                                total: Double(max(manager.stats.totalAssets, 1))
+                            )
+                            Text("\(manager.stats.processedAssets) prepared • \(manager.pendingUploads) queued")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+                    }
+
+                    if !manager.currentItem.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Current file").font(.caption).foregroundStyle(.secondary)
+                            Text(manager.currentItem).font(.headline).lineLimit(2)
+                            if manager.currentBytesExpected > 0 {
+                                ProgressView(value: fileProgress).tint(.green)
+                                Text("\(formattedBytes(manager.currentBytesSent)) of \(formattedBytes(manager.currentBytesExpected))")
+                                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+                    }
+
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                        metric("Saved", manager.stats.copiedFiles, "checkmark.circle.fill", .green)
+                        metric("Queued", manager.pendingUploads, "clock.arrow.circlepath", .blue)
+                        metric("Skipped", manager.stats.skippedFiles, "forward.fill", .orange)
+                        metric("Failed", manager.stats.failedFiles, "exclamationmark.triangle.fill", .red)
+                    }
+
+                    if manager.transferMode == .wifi && manager.pendingUploads > 0 {
+                        Label(
+                            "Uploads can continue when you open another app or lock the screen. Do not swipe Album Copy away from the app switcher.",
+                            systemImage: "iphone.and.arrow.forward"
+                        )
+                        .font(.subheadline)
+                        .foregroundStyle(.blue)
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+                    }
+
+                    if manager.isPreparing {
+                        Button(role: .destructive) { manager.stopCopy() } label: {
+                            Label("Pause Preparation", systemImage: "pause.circle.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if !manager.failures.isEmpty {
+                        Button { showFailures = true } label: {
+                            Label("Show Recent Failures", systemImage: "exclamationmark.triangle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Button { isPresented = false } label: {
+                        Label(manager.isRunning ? "Hide Progress Screen" : "Done", systemImage: "chevron.down.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding()
+            }
+            .background(Color(uiColor: .systemGroupedBackground))
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Close") { isPresented = false }
+                }
+            }
+            .sheet(isPresented: $showFailures) {
+                NavigationStack {
+                    List(manager.failures) { failure in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(failure.path).font(.headline)
+                            Text(failure.reason).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .navigationTitle("Recent Failures")
+                }
+            }
+        }
+    }
+
+    private func metric(_ title: String, _ value: Int, _ icon: String, _ color: Color) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: icon).font(.title2).foregroundStyle(color)
+            Text("\(value)").font(.title2.bold().monospacedDigit())
+            Text(title).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 16)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func formattedBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }

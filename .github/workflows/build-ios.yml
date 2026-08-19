@@ -2,8 +2,6 @@ name: Build iPhone IPA
 
 on:
   push:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
@@ -47,9 +45,9 @@ jobs:
           APP_PATH="build/Build/Products/Release-iphoneos/PhotoUSBBackup.app"
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          /usr/bin/zip -qry PhotoUSBBackup-v3.6-QR-Icon-WiFi-unsigned.ipa Payload
+          /usr/bin/zip -qry PhotoUSBBackup-v3.7-Background-Transfer-unsigned.ipa Payload
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PhotoUSBBackup-v3.6-QR-Icon-WiFi-unsigned-ipa
-          path: PhotoUSBBackup-v3.6-QR-Icon-WiFi-unsigned.ipa
+          name: PhotoUSBBackup-v3.7-Background-Transfer-unsigned-ipa
+          path: PhotoUSBBackup-v3.7-Background-Transfer-unsigned.ipa

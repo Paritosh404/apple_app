@@ -14,13 +14,19 @@ final class AlbumCopyManager: ObservableObject {
     @Published var receiverPort = "8765"
     @Published var status = "Choose Photos access, a source album/folder, and destination."
     @Published var isRunning = false
+    @Published var isPreparing = false
+    @Published var pendingUploads = 0
+    @Published var currentItem = ""
+    @Published var currentBytesSent: Int64 = 0
+    @Published var currentBytesExpected: Int64 = 0
     @Published var stats = CopyStats()
     @Published var failures: [CopyFailure] = []
     private var shouldStop = false
     private var backgroundTaskID:UIBackgroundTaskIdentifier = .invalid
     private var transferTask:Task<Void,Never>?
     private var backgroundExpired = false
-    private lazy var wifiSession: URLSession = {
+    private let backgroundUploader = BackgroundUploadCoordinator.shared
+    private lazy var foregroundSession: URLSession = {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 3600
         configuration.timeoutIntervalForResource = 7200
@@ -30,11 +36,17 @@ final class AlbumCopyManager: ObservableObject {
     }()
 
     var canStart: Bool {
-        guard !isRunning, selectedSource != nil else { return false }
+        guard !isPreparing, selectedSource != nil else { return false }
         return transferMode == .usb ? destinationURL != nil : (!receiverHost.trimmingCharacters(in: .whitespaces).isEmpty && Int(receiverPort) != nil)
     }
 
-    private init() { refreshPermission() }
+    private init() {
+        backgroundUploader.eventHandler = { [weak self] event in
+            Task { @MainActor in self?.handleBackgroundUploadEvent(event) }
+        }
+        backgroundUploader.restoreTasks()
+        refreshPermission()
+    }
 
     func refreshPermission() {
         let s = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -50,7 +62,13 @@ final class AlbumCopyManager: ObservableObject {
 
     func setDestination(_ url: URL) { destinationURL = url; status = "USB destination selected." }
     func selectSource(_ node: PhotoTreeNode) { selectedSource = node; status = "Selected \(node.title)" }
-    func stopCopy() { shouldStop = true; status = "Stopping after current file…" }
+    func stopCopy() {
+        shouldStop = true
+        transferTask?.cancel()
+        status = pendingUploads > 0
+            ? "Stopping preparation — queued background uploads will continue."
+            : "Stopping after the current file…"
+    }
 
     func refreshPhotoTree() {
         guard photoAccessGranted else { return }
@@ -74,12 +92,20 @@ final class AlbumCopyManager: ObservableObject {
 
     func startCopy() {
         guard canStart, let source = selectedSource else { return }
-        isRunning = true; shouldStop = false; backgroundExpired = false; stats = CopyStats(); failures = []
+        if stats.totalAssets == 0 || (stats.processedAssets >= stats.totalAssets && pendingUploads == 0) {
+            stats = CopyStats()
+            failures = []
+        }
+        isPreparing = true
+        updateRunningState()
+        shouldStop = false
+        backgroundExpired = false
         beginBackgroundTransfer()
         transferTask = Task {
             await run(source)
             endBackgroundTransfer()
-            isRunning = false
+            isPreparing = false
+            updateRunningState()
             transferTask = nil
         }
     }
@@ -91,7 +117,9 @@ final class AlbumCopyManager: ObservableObject {
             guard let self else { return }
             self.backgroundExpired = true
             self.shouldStop = true
-            self.status = "Background time expired — reopen the app, then tap Resume Transfer."
+            self.status = self.pendingUploads > 0
+                ? "Preparation paused — queued uploads are continuing in the background."
+                : "Background time expired — reopen the app, then tap Resume Transfer."
             self.transferTask?.cancel()
             self.endBackgroundTransfer()
         }
@@ -118,12 +146,18 @@ final class AlbumCopyManager: ObservableObject {
                 try await copyWiFi(source, clean(source.title), false)
             }
             if shouldStop {
-                status = backgroundExpired ? "Transfer paused — tap Resume Transfer." : "Stopped — tap Resume Transfer."
+                status = pendingUploads > 0
+                    ? "Preparation paused — \(pendingUploads) queued upload(s) continue in the background."
+                    : (backgroundExpired ? "Transfer paused — tap Resume Transfer." : "Stopped — tap Resume Transfer.")
+            } else if pendingUploads > 0 {
+                status = "Prepared — \(pendingUploads) upload(s) continue in the background. You may leave the app."
             } else {
                 status = "Complete — \(stats.copiedFiles) copied, \(stats.skippedFiles) skipped, \(stats.failedFiles) failed."
             }
         } catch is CancellationError {
-            status = "Transfer paused — tap Resume Transfer."
+            status = pendingUploads > 0
+                ? "Preparation paused — queued uploads continue in the background."
+                : "Transfer paused — tap Resume Transfer."
         } catch { status = "Transfer stopped: \(error.localizedDescription)" }
     }
 
@@ -155,26 +189,51 @@ final class AlbumCopyManager: ObservableObject {
         for i in 0..<assets.count {
             if shouldStop { return }
             let asset=assets.object(at:i)
+            var stagedURL: URL?
+            var keepStagedFile = false
             do {
-                let r=try await retry("iCloud/photo preparation for \(n.title) asset \(i+1)") { try await self.stage(asset) }
-                defer { try? FileManager.default.removeItem(at:r.url) }
+                let r=try await retry("iCloud/photo preparation for \(n.title) asset \(i+1)") { try await self.stage(asset, persistent: true) }
+                stagedURL = r.url
                 try Task.checkCancellation()
                 if shouldStop { throw CancellationError() }
-                let skipped=try await retry("PC upload for \(r.name)") { try await self.upload(r.url,here,r.name,r.bytes) }
-                if skipped { stats.skippedFiles+=1 } else { stats.copiedFiles+=1 }
+                let action=try await retry("PC queue check for \(r.name)") { try await self.queueUpload(r.url,here,r.name,r.bytes) }
+                switch action {
+                case .skipped:
+                    stats.skippedFiles += 1
+                case .alreadyQueued:
+                    break
+                case .enqueued:
+                    keepStagedFile = true
+                    stats.queuedFiles += 1
+                    pendingUploads += 1
+                    updateRunningState()
+                }
             } catch is CancellationError {
+                if let stagedURL, !keepStagedFile { try? FileManager.default.removeItem(at: stagedURL) }
                 return
             } catch {
                 fail("\(n.title) / asset \(i+1)",error)
             }
+            if let stagedURL, !keepStagedFile { try? FileManager.default.removeItem(at: stagedURL) }
             stats.processedAssets+=1
-            status="\(n.title): \(i+1) / \(assets.count) — \(stats.failedFiles) failed"
+            currentItem = "\(n.title) / \(i+1) of \(assets.count)"
+            status="Preparing \(n.title): \(i+1) / \(assets.count) — \(pendingUploads) queued"
         }
     }
 
-    private func stage(_ asset:PHAsset) async throws -> (url:URL,name:String,bytes:Int64) {
+    private func stage(_ asset:PHAsset, persistent:Bool = false) async throws -> (url:URL,name:String,bytes:Int64) {
         let rs=PHAssetResource.assetResources(for:asset); guard let r=rs.first(where:{$0.type == .fullSizePhoto || $0.type == .fullSizeVideo}) ?? rs.first else {throw CopyError.resource}
-        let name=uniqueAssetName(r.originalFilename, asset.localIdentifier); let u=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString+"-"+name); let o=PHAssetResourceRequestOptions(); o.isNetworkAccessAllowed=true
+        let name=uniqueAssetName(r.originalFilename, asset.localIdentifier)
+        let directory:URL
+        if persistent {
+            let support=try FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
+            directory=support.appendingPathComponent("PhotoUSBUploads",isDirectory:true)
+            try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        } else {
+            directory=FileManager.default.temporaryDirectory
+        }
+        let u=directory.appendingPathComponent(UUID().uuidString+"-"+name)
+        let o=PHAssetResourceRequestOptions(); o.isNetworkAccessAllowed=true
         try await withCheckedThrowingContinuation { (c:CheckedContinuation<Void,Error>) in PHAssetResourceManager.default().writeData(for:r,toFile:u,options:o){ e in if let e{c.resume(throwing:e)}else{c.resume()} } }
         let b=size(u); guard b>0 else{throw CopyError.resource}; return(u,name,b)
     }
@@ -203,15 +262,53 @@ final class AlbumCopyManager: ObservableObject {
     private func validateReceiver() async throws {
         var request=URLRequest(url:try endpoint("/health"))
         request.timeoutInterval=15
-        let (data,r)=try await wifiSession.data(for:request)
+        let (data,r)=try await foregroundSession.data(for:request)
         guard (r as? HTTPURLResponse)?.statusCode==200,
               let json=try? JSONSerialization.jsonObject(with:data) as? [String:Any],
               json["service"] as? String=="PhotoUSB Receiver",
               json["protocol_version"] as? Int==1 else { throw CopyError.receiver }
     }
-    private func upload(_ file:URL,_ path:String,_ name:String,_ bytes:Int64) async throws -> Bool {
-        var check=URLRequest(url:try endpoint("/check")); check.httpMethod="POST"; check.timeoutInterval=120; check.setValue("application/json",forHTTPHeaderField:"Content-Type"); check.httpBody=try JSONSerialization.data(withJSONObject:["relative_path":path,"filename":name,"size":bytes]); let (d,r)=try await wifiSession.data(for:check); guard (r as? HTTPURLResponse)?.statusCode==200 else{throw CopyError.receiver}; if let j=try? JSONSerialization.jsonObject(with:d) as? [String:Any], j["exists"] as? Bool == true{return true}
-        var q=URLRequest(url:try endpoint("/upload")); q.httpMethod="POST"; q.timeoutInterval=3600; q.setValue(path,forHTTPHeaderField:"X-Relative-Path"); q.setValue(name,forHTTPHeaderField:"X-Filename"); q.setValue(String(bytes),forHTTPHeaderField:"X-File-Size"); q.setValue("application/octet-stream",forHTTPHeaderField:"Content-Type"); let (_,ur)=try await wifiSession.upload(for:q,fromFile:file); guard let h=ur as? HTTPURLResponse,(200...201).contains(h.statusCode) else{throw CopyError.receiver}; return false
+    private func queueUpload(_ file:URL,_ path:String,_ name:String,_ bytes:Int64) async throws -> QueueAction {
+        if await backgroundUploader.contains(relativePath:path,filename:name) { return .alreadyQueued }
+        var check=URLRequest(url:try endpoint("/check")); check.httpMethod="POST"; check.timeoutInterval=120; check.setValue("application/json",forHTTPHeaderField:"Content-Type"); check.httpBody=try JSONSerialization.data(withJSONObject:["relative_path":path,"filename":name,"size":bytes]); let (d,r)=try await foregroundSession.data(for:check); guard (r as? HTTPURLResponse)?.statusCode==200 else{throw CopyError.receiver}; if let j=try? JSONSerialization.jsonObject(with:d) as? [String:Any], j["exists"] as? Bool == true{return .skipped}
+        backgroundUploader.enqueue(fileURL:file,endpoint:try endpoint("/upload"),relativePath:path,filename:name,byteCount:bytes)
+        return .enqueued
+    }
+    private func handleBackgroundUploadEvent(_ event:BackgroundUploadCoordinator.Event) {
+        switch event {
+        case .restored(let pending):
+            pendingUploads = pending
+            stats.queuedFiles = max(stats.queuedFiles, pending)
+            if pending > 0 {
+                status = "Restored \(pending) background upload(s). You may leave the app."
+            }
+        case .progress(let metadata, let sent, let expected, let pending):
+            pendingUploads = pending
+            currentItem = metadata.displayPath
+            currentBytesSent = sent
+            currentBytesExpected = expected
+            status = "Uploading \(metadata.filename) in the background…"
+        case .completed(let metadata, let success, let message, let pending):
+            pendingUploads = pending
+            currentItem = metadata.displayPath
+            currentBytesSent = success ? metadata.byteCount : 0
+            currentBytesExpected = metadata.byteCount
+            if success {
+                stats.copiedFiles += 1
+                status = pending > 0
+                    ? "Saved \(metadata.filename) — \(pending) upload(s) remaining."
+                    : "Complete — \(stats.copiedFiles) copied, \(stats.skippedFiles) skipped, \(stats.failedFiles) failed."
+            } else {
+                fail(metadata.displayPath, TransferMessageError(message ?? "Background upload failed."))
+                status = pending > 0
+                    ? "Upload failed; continuing with \(pending) remaining."
+                    : "Transfer finished with \(stats.failedFiles) failure(s). Tap Resume Transfer to retry."
+            }
+        }
+        updateRunningState()
+    }
+    private func updateRunningState() {
+        isRunning = isPreparing || pendingUploads > 0
     }
     private func endpoint(_ p:String)throws->URL { guard let u=URL(string:"http://\(receiverHost):\(receiverPort)\(p)") else{throw CopyError.receiver}; return u }
     private func album(_ id:String)->PHAssetCollection? { PHAssetCollection.fetchAssetCollections(withLocalIdentifiers:[id],options:nil).firstObject }
@@ -248,6 +345,14 @@ final class AlbumCopyManager: ObservableObject {
         return ext.isEmpty ? "\(shortStem)_\(stable)" : "\(shortStem)_\(stable).\(ext)"
     }
     private func fail(_ p:String,_ e:Error){stats.failedFiles+=1;failures.append(CopyFailure(path:p,reason:e.localizedDescription));if failures.count>30{failures.removeFirst()}}
+}
+
+private enum QueueAction { case skipped, alreadyQueued, enqueued }
+
+private struct TransferMessageError: LocalizedError {
+    let message:String
+    init(_ message:String) { self.message=message }
+    var errorDescription:String? { message }
 }
 
 struct TransferPhaseError: LocalizedError {

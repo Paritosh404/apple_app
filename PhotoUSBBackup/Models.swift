@@ -25,6 +25,7 @@ struct CopyStats {
     var copiedFiles = 0
     var skippedFiles = 0
     var failedFiles = 0
+    var queuedFiles = 0
 }
 
 enum TransferMode: String, CaseIterable, Identifiable {
