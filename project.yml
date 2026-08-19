@@ -19,20 +19,16 @@ targets:
     info:
       path: PhotoUSBBackup/Info.plist
       properties:
-        CFBundleDisplayName: Originals Backup
-        CFBundleShortVersionString: "2.7.1"
-        CFBundleVersion: "10"
+        CFBundleDisplayName: Album Copy
+        CFBundleShortVersionString: "3.0"
+        CFBundleVersion: "30"
         LSRequiresIPhoneOS: true
-        NSPhotoLibraryUsageDescription: "Originals Backup needs access to copy your unmodified photo and video originals to an external drive."
+        NSPhotoLibraryUsageDescription: "Album Copy needs access to read your Photos albums and copy them to an external drive."
         BGTaskSchedulerPermittedIdentifiers:
-          - com.paritosh.PhotoUSBBackup.userExport
+          - com.paritosh.PhotoUSBBackup.albumCopy
         UIBackgroundModes:
           - processing
         UILaunchScreen: {}
-        UISupportedInterfaceOrientations:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.paritosh.PhotoUSBBackup

@@ -1,50 +1,40 @@
 import SwiftUI
 
 struct ContentView: View {
-    @EnvironmentObject private var backup: BackupManager
-    @State private var showFolderPicker = false
+    @EnvironmentObject private var manager: AlbumCopyManager
+    @State private var showDestinationPicker = false
+    @State private var showAlbumPicker = false
     @State private var showFailures = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
-                    Image(systemName: "externaldrive.badge.checkmark")
+                    Image(systemName: "folder.badge.gearshape")
                         .font(.system(size: 60))
-                    Text("Originals + GPS Reconcile")
+
+                    Text("Album Copy")
                         .font(.largeTitle.bold())
-                    Text("Keeps untouched originals and creates a separate GPS-merged copy only when Photos metadata disagrees with the file.")
+
+                    Text("Copy a Photos album/folder hierarchy to an external USB/SSD.")
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
-                    Text(backup.status).multilineTextAlignment(.center)
 
-                    if backup.totalItems > 0 {
-                        ProgressView(value: Double(backup.completedItems), total: Double(backup.totalItems))
-                        HStack {
-                            Text("\(backup.completedItems) / \(backup.totalItems) assets")
-                            Spacer()
-                            Text("\(backup.copiedFiles) copied")
-                        }.font(.subheadline)
-                        HStack {
-                            Text("\(backup.originalFiles) original")
-                            Spacer()
-                            Text("\(backup.fallbackFiles) fallback")
-                        }.font(.caption).foregroundStyle(.secondary)
-                        HStack {
-                            Text("\(backup.disputedFiles) disputed")
-                            Spacer()
-                            Text("\(backup.mergedFiles) merged")
-                        }.font(.caption).foregroundStyle(.secondary)
-                        HStack {
-                            Text("\(backup.skippedFiles) skipped")
-                            Spacer()
-                            Text("\(backup.failedItems.count) failed")
-                        }.font(.caption).foregroundStyle(.secondary)
+                    Text(manager.status)
+                        .multilineTextAlignment(.center)
 
+                    if manager.stats.totalAssets > 0 {
+                        ProgressView(value: Double(manager.stats.processedAssets), total: Double(manager.stats.totalAssets))
                         HStack {
-                            Text("\(backup.adoptedFiles) adopted")
+                            Text("\(manager.stats.processedAssets) / \(manager.stats.totalAssets) assets")
                             Spacer()
-                            Text("\(backup.conflictFiles) true conflicts")
+                            Text("\(manager.stats.copiedFiles) copied")
+                        }
+                        .font(.subheadline)
+                        HStack {
+                            Text("\(manager.stats.skippedFiles) skipped")
+                            Spacer()
+                            Text("\(manager.stats.failedFiles) failed")
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -53,69 +43,90 @@ struct ContentView: View {
                     Divider()
 
                     Button {
-                        Task { await backup.requestPhotoPermission() }
+                        Task { await manager.requestPhotoPermission() }
                     } label: {
-                        Label(backup.photoAccessGranted ? "Photos Access Granted" : "Allow Photos Access",
-                              systemImage: "photo.on.rectangle")
+                        Label(manager.photoAccessGranted ? "Photos Access Granted" : "Allow Photos Access", systemImage: "photo.on.rectangle")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(backup.photoAccessGranted)
+                    .disabled(manager.photoAccessGranted)
 
-                    Button { showFolderPicker = true } label: {
-                        Label(backup.destinationURL == nil ? "Choose USB Folder" : "Change USB Folder",
-                              systemImage: "externaldrive")
+                    Button {
+                        manager.refreshPhotoTree()
+                        showAlbumPicker = true
+                    } label: {
+                        Label(manager.selectedSource == nil ? "Choose Album / Folder" : "Change Album / Folder", systemImage: "folder")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!manager.photoAccessGranted)
+
+                    if let selected = manager.selectedSource {
+                        Text("Source: \(selected.title)").font(.headline)
+                    }
+
+                    Button {
+                        showDestinationPicker = true
+                    } label: {
+                        Label(manager.destinationURL == nil ? "Choose USB Folder" : "Change USB Folder", systemImage: "externaldrive")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
 
-                    if let destination = backup.destinationURL {
-                        Text("Destination: \(destination.lastPathComponent)")
-                            .font(.subheadline)
+                    if let destination = manager.destinationURL {
+                        Text("Destination: \(destination.lastPathComponent)").font(.headline)
                     }
 
                     VStack(alignment: .leading, spacing: 7) {
-                        Label("Untouched originals preserved", systemImage: "lock.shield")
-                        Label("Original resources retried", systemImage: "arrow.clockwise")
-                        Label("Embedded GPS compared with Photos GPS", systemImage: "location")
-                        Label("Disputed original + merged copy", systemImage: "folder")
-                    }.font(.subheadline)
+                        Label("Recreates Photos folder/album structure", systemImage: "folder.fill")
+                        Label("Copies current full-size Photos rendition", systemImage: "photo")
+                        Label("Simple existing-file skip", systemImage: "forward.fill")
+                        Label("Uses .partial files for safe resume", systemImage: "arrow.clockwise")
+                        Label("Processes one asset at a time", systemImage: "memorychip")
+                    }
+                    .font(.subheadline)
 
                     Button {
-                        backup.startBackup()
+                        manager.startCopy()
                     } label: {
-                        Label(backup.isRunning ? "Backup Running…" : "Start Originals Backup",
-                              systemImage: "arrow.right.circle.fill")
+                        Label(manager.isRunning ? "Copy Running…" : "Start Album Copy", systemImage: "arrow.right.circle.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!backup.photoAccessGranted || backup.destinationURL == nil || backup.isRunning)
+                    .disabled(manager.selectedSource == nil || manager.destinationURL == nil || manager.isRunning)
 
-                    if backup.isRunning {
-                        Button(role: .destructive) { backup.cancelBackup() } label: {
+                    if manager.isRunning {
+                        Button(role: .destructive) {
+                            manager.stopCopy()
+                        } label: {
                             Label("Stop After Current File", systemImage: "stop.circle")
                         }
                     }
 
-                    if !backup.failedItems.isEmpty {
+                    if !manager.failures.isEmpty {
                         Button { showFailures = true } label: {
-                            Label("Show Failed Items", systemImage: "exclamationmark.triangle")
+                            Label("Show Recent Failures", systemImage: "exclamationmark.triangle")
                         }
                     }
-                }.padding()
+                }
+                .padding()
             }
-            .navigationTitle("USB Backup")
-            .sheet(isPresented: $showFolderPicker) {
-                FolderPicker { backup.setDestination($0) }
+            .navigationTitle("USB Album Copy")
+            .sheet(isPresented: $showDestinationPicker) {
+                FolderPicker { manager.setDestination($0) }
+            }
+            .sheet(isPresented: $showAlbumPicker) {
+                AlbumPickerView().environmentObject(manager)
             }
             .sheet(isPresented: $showFailures) {
                 NavigationStack {
-                    List(backup.failedItems) { item in
+                    List(manager.failures) { failure in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(item.filename).font(.headline)
-                            Text(item.reason).font(.caption).foregroundStyle(.secondary)
+                            Text(failure.path).font(.headline)
+                            Text(failure.reason).font(.caption).foregroundStyle(.secondary)
                         }
-                    }.navigationTitle("Failed Items")
+                    }
+                    .navigationTitle("Recent Failures")
                 }
             }
         }

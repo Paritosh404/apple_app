@@ -20,9 +20,8 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Verify privacy key before build
-        run: |
-          /usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryUsageDescription" PhotoUSBBackup/Info.plist
+      - name: Verify Photos privacy key
+        run: /usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryUsageDescription" PhotoUSBBackup/Info.plist
 
       - name: Build unsigned device app
         run: |
@@ -39,27 +38,17 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             clean build
 
-      - name: Verify built app privacy key
-        run: |
-          APP_PLIST="build/Build/Products/Release-iphoneos/PhotoUSBBackup.app/Info.plist"
-          /usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryUsageDescription" "$APP_PLIST"
-
       - name: Package unsigned IPA
         run: |
           APP_PATH="build/Build/Products/Release-iphoneos/PhotoUSBBackup.app"
-
-          if [ ! -d "$APP_PATH" ]; then
-            echo "Built .app not found at $APP_PATH"
-            exit 1
-          fi
-
+          test -d "$APP_PATH"
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          /usr/bin/zip -qry PhotoUSBBackup-v2.7.1-unsigned.ipa Payload
+          /usr/bin/zip -qry PhotoUSBBackup-v3.0-Album-Copy-unsigned.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: PhotoUSBBackup-v2.7.1-unsigned-ipa
-          path: PhotoUSBBackup-v2.7.1-unsigned.ipa
+          name: PhotoUSBBackup-v3.0-Album-Copy-unsigned-ipa
+          path: PhotoUSBBackup-v3.0-Album-Copy-unsigned.ipa
           if-no-files-found: error
