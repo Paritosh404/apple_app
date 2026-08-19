@@ -1,4 +1,4 @@
-# PhotoUSBBackup v3.0.1 — Album Copy
+# PhotoUSBBackup v3.2 — Album Copy
 
 This is a simplified branch focused on copying the Photos album/folder structure already organized on the iPhone to an external USB/SSD.
 
@@ -56,3 +56,7 @@ NSError domain, code, and message, for example:
 `USB write USB failed for IMG_3053.MOV.partial [NSCocoaErrorDomain 512]: ...`
 
 This makes external-drive failures much easier to diagnose.
+
+## v3.2 collision-safe filenames
+
+Every exported asset now receives a deterministic filename suffix derived from its Photos local identifier. Distinct assets that share generic names such as `FullSizeRender.jpeg` can no longer overwrite or falsely skip one another. The same asset receives the same name on later runs, so same-size restart skipping remains available.
