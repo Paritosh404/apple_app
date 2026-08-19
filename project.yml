@@ -20,8 +20,8 @@ targets:
       path: PhotoUSBBackup/Info.plist
       properties:
         CFBundleDisplayName: Album Copy
-        CFBundleShortVersionString: "3.2"
-        CFBundleVersion: "32"
+        CFBundleShortVersionString: "3.3"
+        CFBundleVersion: "33"
         LSRequiresIPhoneOS: true
         NSPhotoLibraryUsageDescription: "Album Copy needs access to read your Photos albums and copy them."
         NSLocalNetworkUsageDescription: "Album Copy uses your local Wi-Fi network to send album folders and files to your PC."
