@@ -37,7 +37,21 @@ final class AlbumCopyManager: ObservableObject {
 
     var canStart: Bool {
         guard !isPreparing, selectedSource != nil else { return false }
+        if pendingUploads > 0 && (stats.totalAssets == 0 || preparationComplete) { return false }
         return transferMode == .usb ? destinationURL != nil : (!receiverHost.trimmingCharacters(in: .whitespaces).isEmpty && Int(receiverPort) != nil)
+    }
+
+    var preparationComplete: Bool {
+        stats.totalAssets > 0 && stats.processedAssets >= stats.totalAssets
+    }
+
+    var primaryActionTitle: String {
+        if isPreparing { return "Preparing Transfer…" }
+        if pendingUploads > 0 && (stats.totalAssets == 0 || preparationComplete) { return "Uploads Running…" }
+        if stats.totalAssets > 0 && stats.processedAssets < stats.totalAssets { return "Resume Preparation" }
+        if preparationComplete && stats.failedFiles > 0 { return "Retry Failed Files" }
+        if preparationComplete { return "Start New Transfer" }
+        return "Start Transfer"
     }
 
     private init() {
@@ -287,7 +301,7 @@ final class AlbumCopyManager: ObservableObject {
             currentItem = metadata.displayPath
             currentBytesSent = sent
             currentBytesExpected = expected
-            status = "Uploading \(metadata.filename) in the background…"
+            status = "Uploading in the background — \(pending) remaining."
         case .completed(let metadata, let success, let message, let pending):
             pendingUploads = pending
             currentItem = metadata.displayPath
@@ -296,7 +310,7 @@ final class AlbumCopyManager: ObservableObject {
             if success {
                 stats.copiedFiles += 1
                 status = pending > 0
-                    ? "Saved \(metadata.filename) — \(pending) upload(s) remaining."
+                    ? "Upload saved — \(pending) remaining."
                     : "Complete — \(stats.copiedFiles) copied, \(stats.skippedFiles) skipped, \(stats.failedFiles) failed."
             } else {
                 fail(metadata.displayPath, TransferMessageError(message ?? "Background upload failed."))

@@ -18,7 +18,9 @@ struct ContentView: View {
                     Picker("Transfer Mode", selection: $manager.transferMode) {
                         ForEach(TransferMode.allCases) { mode in Text(mode.rawValue).tag(mode) }
                     }.pickerStyle(.segmented)
-                    Text(manager.status).multilineTextAlignment(.center)
+                    Text(manager.status)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3, reservesSpace: true)
                     if manager.stats.totalAssets > 0 {
                         ProgressView(value: Double(manager.stats.processedAssets), total: Double(manager.stats.totalAssets))
                         HStack { Text("\(manager.stats.processedAssets) / \(manager.stats.totalAssets)"); Spacer(); Text("\(manager.stats.copiedFiles) copied") }.font(.subheadline)
@@ -51,7 +53,7 @@ struct ContentView: View {
                         manager.startCopy()
                         showTransferScreen = true
                     } label: {
-                        Label(manager.isPreparing ? "Preparing Transfer…" : (manager.stats.processedAssets > 0 ? "Resume Transfer" : "Start Transfer"), systemImage: "arrow.right.circle.fill").frame(maxWidth: .infinity)
+                        Label(manager.primaryActionTitle, systemImage: manager.pendingUploads > 0 && !manager.isPreparing ? "arrow.up.circle.fill" : "arrow.right.circle.fill").frame(maxWidth: .infinity)
                     }.buttonStyle(.borderedProminent).disabled(!manager.canStart)
                     if manager.isRunning {
                         Button { showTransferScreen = true } label: {
@@ -136,6 +138,8 @@ private struct TransferProgressView: View {
                         Text(manager.status)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
+                            .lineLimit(2, reservesSpace: true)
+                            .frame(maxWidth: .infinity)
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
@@ -169,10 +173,14 @@ private struct TransferProgressView: View {
                         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
                     }
 
-                    if !manager.currentItem.isEmpty {
+                    if manager.isRunning || manager.stats.totalAssets > 0 || !manager.currentItem.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Current file").font(.caption).foregroundStyle(.secondary)
-                            Text(manager.currentItem).font(.headline).lineLimit(2)
+                            Text(manager.currentItem.isEmpty ? "Preparing next file…" : manager.currentItem)
+                                .font(.headline)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .leading)
                             if manager.currentBytesExpected > 0 {
                                 ProgressView(value: fileProgress).tint(.green)
                                 Text("\(formattedBytes(manager.currentBytesSent)) of \(formattedBytes(manager.currentBytesExpected))")

@@ -1,4 +1,4 @@
-# PhotoUSBBackup v3.7 — Album Copy
+# PhotoUSBBackup v3.7.1 — Album Copy
 
 This is a simplified branch focused on copying the Photos album/folder structure already organized on the iPhone to an external USB/SSD.
 
@@ -32,6 +32,12 @@ This branch intentionally does not perform the old GPS reconciliation, RAW/origi
 - Pausing stops new preparation while uploads already handed to iOS continue safely.
 
 iOS cancels background transfers if the user explicitly swipes the app away from the app switcher. Reopen Album Copy and use Resume Transfer after a force quit.
+
+### v3.7.1 progress-screen fixes
+
+- Finished preparation now shows **Uploads Running** instead of exposing a Resume button while queued uploads are active.
+- Resume is available only when preparation actually stopped before reaching the end of the selected source.
+- Fast-changing filenames stay on one fixed-height, middle-truncated line, and status text reserves a stable height so the transfer screen no longer jumps.
 
 ## Windows build
 
