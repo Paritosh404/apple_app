@@ -114,7 +114,7 @@ final class AlbumCopyManager: ObservableObject {
                 try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
                 try await copyUSB(source, root, false)
             } else {
-                try await retry("PC receiver connection") { try await self.ping() }
+                try await retry("PC receiver connection") { try await self.validateReceiver() }
                 try await copyWiFi(source, clean(source.title), false)
             }
             if shouldStop {
@@ -179,11 +179,35 @@ final class AlbumCopyManager: ObservableObject {
         let b=size(u); guard b>0 else{throw CopyError.resource}; return(u,name,b)
     }
 
-    private func ping() async throws {
+    func connectFromQRCode(_ value:String) async {
+        guard let components=URLComponents(string:value),
+              components.scheme?.lowercased()=="photousb",
+              components.host?.lowercased()=="connect",
+              let host=components.queryItems?.first(where:{$0.name=="host"})?.value,
+              let portText=components.queryItems?.first(where:{$0.name=="port"})?.value,
+              let port=Int(portText), (1...65535).contains(port), !host.isEmpty else {
+            status="That QR code is not a PhotoUSB receiver code."
+            return
+        }
+        receiverHost=host
+        receiverPort=String(port)
+        status="Validating PhotoUSB receiver…"
+        do {
+            try await validateReceiver()
+            status="Connected to PhotoUSB receiver at \(host):\(port)."
+        } catch {
+            status="QR found, but receiver validation failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func validateReceiver() async throws {
         var request=URLRequest(url:try endpoint("/health"))
         request.timeoutInterval=15
-        let (_,r)=try await wifiSession.data(for:request)
-        guard (r as? HTTPURLResponse)?.statusCode==200 else{throw CopyError.receiver}
+        let (data,r)=try await wifiSession.data(for:request)
+        guard (r as? HTTPURLResponse)?.statusCode==200,
+              let json=try? JSONSerialization.jsonObject(with:data) as? [String:Any],
+              json["service"] as? String=="PhotoUSB Receiver",
+              json["protocol_version"] as? Int==1 else { throw CopyError.receiver }
     }
     private func upload(_ file:URL,_ path:String,_ name:String,_ bytes:Int64) async throws -> Bool {
         var check=URLRequest(url:try endpoint("/check")); check.httpMethod="POST"; check.timeoutInterval=120; check.setValue("application/json",forHTTPHeaderField:"Content-Type"); check.httpBody=try JSONSerialization.data(withJSONObject:["relative_path":path,"filename":name,"size":bytes]); let (d,r)=try await wifiSession.data(for:check); guard (r as? HTTPURLResponse)?.statusCode==200 else{throw CopyError.receiver}; if let j=try? JSONSerialization.jsonObject(with:d) as? [String:Any], j["exists"] as? Bool == true{return true}
