@@ -8,8 +8,7 @@ jobs:
     runs-on: macos-26
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Show Xcode version
         run: xcodebuild -version
@@ -19,9 +18,6 @@ jobs:
 
       - name: Generate Xcode project
         run: xcodegen generate
-
-      - name: Verify Photos privacy key
-        run: /usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryUsageDescription" PhotoUSBBackup/Info.plist
 
       - name: Build unsigned device app
         run: |
@@ -41,14 +37,11 @@ jobs:
       - name: Package unsigned IPA
         run: |
           APP_PATH="build/Build/Products/Release-iphoneos/PhotoUSBBackup.app"
-          test -d "$APP_PATH"
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          /usr/bin/zip -qry PhotoUSBBackup-v3.0.1-Album-Copy-unsigned.ipa Payload
+          /usr/bin/zip -qry PhotoUSBBackup-v3.1-WiFi-unsigned.ipa Payload
 
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: PhotoUSBBackup-v3.0.1-Album-Copy-unsigned-ipa
-          path: PhotoUSBBackup-v3.0.1-Album-Copy-unsigned.ipa
-          if-no-files-found: error
+          name: PhotoUSBBackup-v3.1-WiFi-unsigned-ipa
+          path: PhotoUSBBackup-v3.1-WiFi-unsigned.ipa

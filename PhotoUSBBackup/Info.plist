@@ -9,13 +9,12 @@
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
     <key>CFBundlePackageType</key><string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
-    <key>CFBundleShortVersionString</key><string>3.0.1</string>
+    <key>CFBundleShortVersionString</key><string>3.1</string>
     <key>CFBundleVersion</key><string>31</string>
     <key>LSRequiresIPhoneOS</key><true/>
-    <key>NSPhotoLibraryUsageDescription</key>
-    <string>Album Copy needs access to read your Photos albums and copy them to an external drive.</string>
-    <key>BGTaskSchedulerPermittedIdentifiers</key>
-    <array><string>com.paritosh.PhotoUSBBackup.albumCopy</string></array>
+    <key>NSPhotoLibraryUsageDescription</key><string>Album Copy needs access to read your Photos albums and copy them.</string>
+    <key>NSLocalNetworkUsageDescription</key><string>Album Copy uses your local Wi-Fi network to send album folders and files to your PC.</string>
+    <key>BGTaskSchedulerPermittedIdentifiers</key><array><string>com.paritosh.PhotoUSBBackup.albumCopy</string></array>
     <key>UIBackgroundModes</key><array><string>processing</string></array>
     <key>UILaunchScreen</key><dict/>
 </dict>

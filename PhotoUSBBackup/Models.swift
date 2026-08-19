@@ -26,3 +26,10 @@ struct CopyStats {
     var skippedFiles = 0
     var failedFiles = 0
 }
+
+enum TransferMode: String, CaseIterable, Identifiable {
+    case usb = "USB / SSD"
+    case wifi = "Same Wi-Fi"
+
+    var id: String { rawValue }
+}
