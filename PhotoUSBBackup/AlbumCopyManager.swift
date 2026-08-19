@@ -116,7 +116,7 @@ final class AlbumCopyManager: ObservableObject {
 
     private func stage(_ asset:PHAsset) async throws -> (url:URL,name:String,bytes:Int64) {
         let rs=PHAssetResource.assetResources(for:asset); guard let r=rs.first(where:{$0.type == .fullSizePhoto || $0.type == .fullSizeVideo}) ?? rs.first else {throw CopyError.resource}
-        let name=clean(r.originalFilename); let u=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString+"-"+name); let o=PHAssetResourceRequestOptions(); o.isNetworkAccessAllowed=true
+        let name=uniqueAssetName(r.originalFilename, asset.localIdentifier); let u=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString+"-"+name); let o=PHAssetResourceRequestOptions(); o.isNetworkAccessAllowed=true
         try await withCheckedThrowingContinuation { (c:CheckedContinuation<Void,Error>) in PHAssetResourceManager.default().writeData(for:r,toFile:u,options:o){ e in if let e{c.resume(throwing:e)}else{c.resume()} } }
         let b=size(u); guard b>0 else{throw CopyError.resource}; return(u,name,b)
     }
@@ -130,6 +130,18 @@ final class AlbumCopyManager: ObservableObject {
     private func album(_ id:String)->PHAssetCollection? { PHAssetCollection.fetchAssetCollections(withLocalIdentifiers:[id],options:nil).firstObject }
     private func size(_ u:URL)->Int64 { Int64((try? u.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0) }
     private func clean(_ s:String)->String { let x=s.replacingOccurrences(of:"/",with:"_").replacingOccurrences(of:":",with:"_").trimmingCharacters(in:.whitespacesAndNewlines); return x.isEmpty ? "Untitled" : x }
+    private func uniqueAssetName(_ original:String,_ assetIdentifier:String)->String {
+        let cleaned=clean(original)
+        let file=cleaned as NSString
+        let ext=file.pathExtension
+        let stem=file.deletingPathExtension
+        let rawID=assetIdentifier.split(separator:"/").first.map(String.init) ?? assetIdentifier
+        let suffix=rawID.filter { $0.isLetter || $0.isNumber }
+        let stable=suffix.isEmpty ? "asset" : suffix
+        let maxStem=max(1,180-stable.count-ext.count-2)
+        let shortStem=String(stem.prefix(maxStem))
+        return ext.isEmpty ? "\(shortStem)_\(stable)" : "\(shortStem)_\(stable).\(ext)"
+    }
     private func fail(_ p:String,_ e:Error){stats.failedFiles+=1;failures.append(CopyFailure(path:p,reason:e.localizedDescription));if failures.count>30{failures.removeFirst()}}
 }
 
