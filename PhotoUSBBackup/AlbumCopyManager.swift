@@ -27,6 +27,8 @@ final class AlbumCopyManager: ObservableObject {
     private var transferTask:Task<Void,Never>?
     private var backgroundExpired = false
     private var stopRequested = false
+    private var progressSourceID: String?
+    private var processedAssetKeys = Set<String>()
     private let backgroundUploader = BackgroundUploadCoordinator.shared
     private lazy var foregroundSession: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -135,10 +137,13 @@ final class AlbumCopyManager: ObservableObject {
 
     func startCopy() {
         guard canStart, let source = selectedSource else { return }
-        if stats.totalAssets == 0 || (stats.processedAssets >= stats.totalAssets && pendingUploads == 0) {
+        let sourceChanged = progressSourceID != source.id
+        if sourceChanged || stats.totalAssets == 0 || (stats.processedAssets >= stats.totalAssets && pendingUploads == 0) {
             stats = CopyStats()
             failures = []
+            processedAssetKeys.removeAll()
         }
+        progressSourceID = source.id
         isPreparing = true
         updateRunningState()
         shouldStop = false
@@ -224,8 +229,28 @@ final class AlbumCopyManager: ObservableObject {
         let assets = PHAsset.fetchAssets(in:a,options:nil)
         for i in 0..<assets.count {
             if shouldStop { return }
-            do { let r = try await stage(assets.object(at:i)); defer{try? FileManager.default.removeItem(at:r.url)}; let final=here.appendingPathComponent(r.name); if FileManager.default.fileExists(atPath:final.path), size(final)==r.bytes { stats.skippedFiles += 1 } else { try? FileManager.default.removeItem(at:final); try FileManager.default.copyItem(at:r.url,to:final); guard size(final)==r.bytes else { throw CopyError.write }; stats.copiedFiles += 1 } } catch { fail("\(n.title) / asset \(i+1)",error); shouldStop=true; return }
-            stats.processedAssets += 1; status="\(n.title): \(i+1) / \(assets.count)"
+            let asset = assets.object(at:i)
+            let progressKey = assetProgressKey(albumID:n.localIdentifier,assetID:asset.localIdentifier)
+            if processedAssetKeys.contains(progressKey) { continue }
+            do {
+                let r = try await stage(asset)
+                defer { try? FileManager.default.removeItem(at:r.url) }
+                let final = here.appendingPathComponent(r.name)
+                if FileManager.default.fileExists(atPath:final.path), size(final) == r.bytes {
+                    stats.skippedFiles += 1
+                } else {
+                    try? FileManager.default.removeItem(at:final)
+                    try FileManager.default.copyItem(at:r.url,to:final)
+                    guard size(final) == r.bytes else { throw CopyError.write }
+                    stats.copiedFiles += 1
+                }
+            } catch {
+                fail("\(n.title) / asset \(i+1)",error)
+                shouldStop = true
+                return
+            }
+            markProcessed(progressKey)
+            status="\(n.title): \(i+1) / \(assets.count)"
         }
     }
 
@@ -237,6 +262,8 @@ final class AlbumCopyManager: ObservableObject {
         for i in 0..<assets.count {
             if shouldStop { return }
             let asset=assets.object(at:i)
+            let progressKey=assetProgressKey(albumID:n.localIdentifier,assetID:asset.localIdentifier)
+            if processedAssetKeys.contains(progressKey) { continue }
             var stagedURL: URL?
             var keepStagedFile = false
             do {
@@ -263,7 +290,7 @@ final class AlbumCopyManager: ObservableObject {
                 fail("\(n.title) / asset \(i+1)",error)
             }
             if let stagedURL, !keepStagedFile { try? FileManager.default.removeItem(at: stagedURL) }
-            stats.processedAssets+=1
+            markProcessed(progressKey)
             currentItem = "\(n.title) / \(i+1) of \(assets.count)"
             status="Preparing \(n.title): \(i+1) / \(assets.count) — \(pendingUploads) queued"
         }
@@ -378,11 +405,21 @@ final class AlbumCopyManager: ObservableObject {
         currentBytesExpected = 0
         stats = CopyStats()
         failures = []
+        progressSourceID = nil
+        processedAssetKeys.removeAll()
         status = "Transfer stopped. The queue has been cleared."
         updateRunningState()
     }
     private func updateRunningState() {
         isRunning = isPreparing || pendingUploads > 0 || uploadsPaused
+    }
+    private func assetProgressKey(albumID:String,assetID:String)->String {
+        albumID + "\u{1F}" + assetID
+    }
+    private func markProcessed(_ key:String) {
+        if processedAssetKeys.insert(key).inserted {
+            stats.processedAssets = min(stats.totalAssets, processedAssetKeys.count)
+        }
     }
     private func endpoint(_ p:String)throws->URL { guard let u=URL(string:"http://\(receiverHost):\(receiverPort)\(p)") else{throw CopyError.receiver}; return u }
     private func album(_ id:String)->PHAssetCollection? { PHAssetCollection.fetchAssetCollections(withLocalIdentifiers:[id],options:nil).firstObject }
