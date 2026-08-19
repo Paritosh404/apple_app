@@ -18,6 +18,8 @@ final class AlbumCopyManager: ObservableObject {
     @Published var failures: [CopyFailure] = []
     private var shouldStop = false
     private var backgroundTaskID:UIBackgroundTaskIdentifier = .invalid
+    private var transferTask:Task<Void,Never>?
+    private var backgroundExpired = false
     private lazy var wifiSession: URLSession = {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 3600
@@ -72,12 +74,13 @@ final class AlbumCopyManager: ObservableObject {
 
     func startCopy() {
         guard canStart, let source = selectedSource else { return }
-        isRunning = true; shouldStop = false; stats = CopyStats(); failures = []
+        isRunning = true; shouldStop = false; backgroundExpired = false; stats = CopyStats(); failures = []
         beginBackgroundTransfer()
-        Task {
+        transferTask = Task {
             await run(source)
             endBackgroundTransfer()
             isRunning = false
+            transferTask = nil
         }
     }
 
@@ -86,8 +89,10 @@ final class AlbumCopyManager: ObservableObject {
         UIApplication.shared.isIdleTimerDisabled = true
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "PhotoUSB Wi-Fi Transfer") { [weak self] in
             guard let self else { return }
-            self.status = "Background time expired — reopen the app and run again to resume."
+            self.backgroundExpired = true
             self.shouldStop = true
+            self.status = "Background time expired — reopen the app, then tap Resume Transfer."
+            self.transferTask?.cancel()
             self.endBackgroundTransfer()
         }
     }
@@ -112,7 +117,13 @@ final class AlbumCopyManager: ObservableObject {
                 try await retry("PC receiver connection") { try await self.ping() }
                 try await copyWiFi(source, clean(source.title), false)
             }
-            status = shouldStop ? "Stopped — run again to resume." : "Complete — \(stats.copiedFiles) copied, \(stats.skippedFiles) skipped, \(stats.failedFiles) failed."
+            if shouldStop {
+                status = backgroundExpired ? "Transfer paused — tap Resume Transfer." : "Stopped — tap Resume Transfer."
+            } else {
+                status = "Complete — \(stats.copiedFiles) copied, \(stats.skippedFiles) skipped, \(stats.failedFiles) failed."
+            }
+        } catch is CancellationError {
+            status = "Transfer paused — tap Resume Transfer."
         } catch { status = "Transfer stopped: \(error.localizedDescription)" }
     }
 
@@ -147,6 +158,8 @@ final class AlbumCopyManager: ObservableObject {
             do {
                 let r=try await retry("iCloud/photo preparation for \(n.title) asset \(i+1)") { try await self.stage(asset) }
                 defer { try? FileManager.default.removeItem(at:r.url) }
+                try Task.checkCancellation()
+                if shouldStop { throw CancellationError() }
                 let skipped=try await retry("PC upload for \(r.name)") { try await self.upload(r.url,here,r.name,r.bytes) }
                 if skipped { stats.skippedFiles+=1 } else { stats.copiedFiles+=1 }
             } catch is CancellationError {
@@ -183,8 +196,11 @@ final class AlbumCopyManager: ObservableObject {
     private func retry<T>(_ phase:String,attempts:Int=3,_ operation:() async throws -> T) async throws -> T {
         var lastError:Error?
         for attempt in 1...attempts {
+            try Task.checkCancellation()
             if shouldStop { throw CancellationError() }
             do { return try await operation() }
+            catch is CancellationError { throw CancellationError() }
+            catch let error as URLError where error.code == .cancelled { throw CancellationError() }
             catch {
                 lastError=error
                 if attempt < attempts {
