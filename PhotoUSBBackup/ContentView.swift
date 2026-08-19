@@ -43,7 +43,7 @@ struct ContentView: View {
                         }
                     }
                     Button { manager.startCopy() } label: {
-                        Label(manager.isRunning ? "Transfer Running…" : "Start Transfer", systemImage: "arrow.right.circle.fill").frame(maxWidth: .infinity)
+                        Label(manager.isRunning ? "Transfer Running…" : (manager.stats.processedAssets > 0 ? "Resume Transfer" : "Start Transfer"), systemImage: "arrow.right.circle.fill").frame(maxWidth: .infinity)
                     }.buttonStyle(.borderedProminent).disabled(!manager.canStart)
                     if manager.isRunning { Button(role: .destructive) { manager.stopCopy() } label: { Label("Stop After Current File", systemImage: "stop.circle") } }
                     if !manager.failures.isEmpty { Button { showFailures = true } label: { Label("Show Recent Failures", systemImage: "exclamationmark.triangle") } }
