@@ -39,9 +39,9 @@ jobs:
           APP_PATH="build/Build/Products/Release-iphoneos/PhotoUSBBackup.app"
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          /usr/bin/zip -qry PhotoUSBBackup-v3.1-WiFi-unsigned.ipa Payload
+          /usr/bin/zip -qry PhotoUSBBackup-v3.2-Collision-Safe-WiFi-unsigned.ipa Payload
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PhotoUSBBackup-v3.1-WiFi-unsigned-ipa
-          path: PhotoUSBBackup-v3.1-WiFi-unsigned.ipa
+          name: PhotoUSBBackup-v3.2-Collision-Safe-WiFi-unsigned-ipa
+          path: PhotoUSBBackup-v3.2-Collision-Safe-WiFi-unsigned.ipa
