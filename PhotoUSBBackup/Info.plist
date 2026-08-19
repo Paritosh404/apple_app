@@ -9,8 +9,8 @@
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
     <key>CFBundlePackageType</key><string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
-    <key>CFBundleShortVersionString</key><string>3.4</string>
-    <key>CFBundleVersion</key><string>34</string>
+    <key>CFBundleShortVersionString</key><string>3.5</string>
+    <key>CFBundleVersion</key><string>35</string>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>NSPhotoLibraryUsageDescription</key><string>Album Copy needs access to read your Photos albums and copy them.</string>
     <key>NSLocalNetworkUsageDescription</key><string>Album Copy uses your local Wi-Fi network to send album folders and files to your PC.</string>
