@@ -16,6 +16,14 @@ final class AlbumCopyManager: ObservableObject {
     @Published var stats = CopyStats()
     @Published var failures: [CopyFailure] = []
     private var shouldStop = false
+    private lazy var wifiSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 3600
+        configuration.timeoutIntervalForResource = 7200
+        configuration.waitsForConnectivity = true
+        configuration.httpMaximumConnectionsPerHost = 1
+        return URLSession(configuration: configuration)
+    }()
 
     var canStart: Bool {
         guard !isRunning, selectedSource != nil else { return false }
@@ -76,10 +84,10 @@ final class AlbumCopyManager: ObservableObject {
                 try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
                 try await copyUSB(source, root, false)
             } else {
-                try await ping()
+                try await retry("PC receiver connection") { try await self.ping() }
                 try await copyWiFi(source, clean(source.title), false)
             }
-            status = shouldStop ? "Stopped — run again to resume." : "Complete — \(stats.copiedFiles) copied, \(stats.skippedFiles) skipped."
+            status = shouldStop ? "Stopped — run again to resume." : "Complete — \(stats.copiedFiles) copied, \(stats.skippedFiles) skipped, \(stats.failedFiles) failed."
         } catch { status = "Transfer stopped: \(error.localizedDescription)" }
     }
 
@@ -109,8 +117,20 @@ final class AlbumCopyManager: ObservableObject {
         if n.kind == .folder { for c in n.children { try await copyWiFi(c,here,true) }; return }
         guard let a=album(n.localIdentifier) else{return}; let assets=PHAsset.fetchAssets(in:a,options:nil)
         for i in 0..<assets.count {
-            if shouldStop{return}; let r=try await stage(assets.object(at:i)); defer{try? FileManager.default.removeItem(at:r.url)}
-            let skipped=try await upload(r.url,here,r.name,r.bytes); if skipped {stats.skippedFiles+=1}else{stats.copiedFiles+=1}; stats.processedAssets+=1; status="\(n.title): \(i+1) / \(assets.count)"
+            if shouldStop { return }
+            let asset=assets.object(at:i)
+            do {
+                let r=try await retry("iCloud/photo preparation for \(n.title) asset \(i+1)") { try await self.stage(asset) }
+                defer { try? FileManager.default.removeItem(at:r.url) }
+                let skipped=try await retry("PC upload for \(r.name)") { try await self.upload(r.url,here,r.name,r.bytes) }
+                if skipped { stats.skippedFiles+=1 } else { stats.copiedFiles+=1 }
+            } catch is CancellationError {
+                return
+            } catch {
+                fail("\(n.title) / asset \(i+1)",error)
+            }
+            stats.processedAssets+=1
+            status="\(n.title): \(i+1) / \(assets.count) — \(stats.failedFiles) failed"
         }
     }
 
@@ -121,15 +141,35 @@ final class AlbumCopyManager: ObservableObject {
         let b=size(u); guard b>0 else{throw CopyError.resource}; return(u,name,b)
     }
 
-    private func ping() async throws { let (_,r)=try await URLSession.shared.data(from:try endpoint("/health")); guard (r as? HTTPURLResponse)?.statusCode==200 else{throw CopyError.receiver} }
+    private func ping() async throws {
+        var request=URLRequest(url:try endpoint("/health"))
+        request.timeoutInterval=15
+        let (_,r)=try await wifiSession.data(for:request)
+        guard (r as? HTTPURLResponse)?.statusCode==200 else{throw CopyError.receiver}
+    }
     private func upload(_ file:URL,_ path:String,_ name:String,_ bytes:Int64) async throws -> Bool {
-        var check=URLRequest(url:try endpoint("/check")); check.httpMethod="POST"; check.setValue("application/json",forHTTPHeaderField:"Content-Type"); check.httpBody=try JSONSerialization.data(withJSONObject:["relative_path":path,"filename":name,"size":bytes]); let (d,r)=try await URLSession.shared.data(for:check); guard (r as? HTTPURLResponse)?.statusCode==200 else{throw CopyError.receiver}; if let j=try? JSONSerialization.jsonObject(with:d) as? [String:Any], j["exists"] as? Bool == true{return true}
-        var q=URLRequest(url:try endpoint("/upload")); q.httpMethod="POST"; q.setValue(path,forHTTPHeaderField:"X-Relative-Path"); q.setValue(name,forHTTPHeaderField:"X-Filename"); q.setValue(String(bytes),forHTTPHeaderField:"X-File-Size"); q.setValue("application/octet-stream",forHTTPHeaderField:"Content-Type"); let (_,ur)=try await URLSession.shared.upload(for:q,fromFile:file); guard let h=ur as? HTTPURLResponse,(200...201).contains(h.statusCode) else{throw CopyError.receiver}; return false
+        var check=URLRequest(url:try endpoint("/check")); check.httpMethod="POST"; check.timeoutInterval=120; check.setValue("application/json",forHTTPHeaderField:"Content-Type"); check.httpBody=try JSONSerialization.data(withJSONObject:["relative_path":path,"filename":name,"size":bytes]); let (d,r)=try await wifiSession.data(for:check); guard (r as? HTTPURLResponse)?.statusCode==200 else{throw CopyError.receiver}; if let j=try? JSONSerialization.jsonObject(with:d) as? [String:Any], j["exists"] as? Bool == true{return true}
+        var q=URLRequest(url:try endpoint("/upload")); q.httpMethod="POST"; q.timeoutInterval=3600; q.setValue(path,forHTTPHeaderField:"X-Relative-Path"); q.setValue(name,forHTTPHeaderField:"X-Filename"); q.setValue(String(bytes),forHTTPHeaderField:"X-File-Size"); q.setValue("application/octet-stream",forHTTPHeaderField:"Content-Type"); let (_,ur)=try await wifiSession.upload(for:q,fromFile:file); guard let h=ur as? HTTPURLResponse,(200...201).contains(h.statusCode) else{throw CopyError.receiver}; return false
     }
     private func endpoint(_ p:String)throws->URL { guard let u=URL(string:"http://\(receiverHost):\(receiverPort)\(p)") else{throw CopyError.receiver}; return u }
     private func album(_ id:String)->PHAssetCollection? { PHAssetCollection.fetchAssetCollections(withLocalIdentifiers:[id],options:nil).firstObject }
     private func size(_ u:URL)->Int64 { Int64((try? u.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0) }
     private func clean(_ s:String)->String { let x=s.replacingOccurrences(of:"/",with:"_").replacingOccurrences(of:":",with:"_").trimmingCharacters(in:.whitespacesAndNewlines); return x.isEmpty ? "Untitled" : x }
+    private func retry<T>(_ phase:String,attempts:Int=3,_ operation:() async throws -> T) async throws -> T {
+        var lastError:Error?
+        for attempt in 1...attempts {
+            if shouldStop { throw CancellationError() }
+            do { return try await operation() }
+            catch {
+                lastError=error
+                if attempt < attempts {
+                    status="\(phase) failed — retry \(attempt+1) of \(attempts)…"
+                    try await Task.sleep(nanoseconds:UInt64(attempt)*2_000_000_000)
+                }
+            }
+        }
+        throw TransferPhaseError(phase:phase,underlying:lastError ?? CopyError.receiver)
+    }
     private func uniqueAssetName(_ original:String,_ assetIdentifier:String)->String {
         let cleaned=clean(original)
         let file=cleaned as NSString
@@ -143,6 +183,12 @@ final class AlbumCopyManager: ObservableObject {
         return ext.isEmpty ? "\(shortStem)_\(stable)" : "\(shortStem)_\(stable).\(ext)"
     }
     private func fail(_ p:String,_ e:Error){stats.failedFiles+=1;failures.append(CopyFailure(path:p,reason:e.localizedDescription));if failures.count>30{failures.removeFirst()}}
+}
+
+struct TransferPhaseError: LocalizedError {
+    let phase:String
+    let underlying:Error
+    var errorDescription:String? { "\(phase) failed after 3 attempts: \(underlying.localizedDescription)" }
 }
 
 enum CopyError: LocalizedError { case resource,receiver,write; var errorDescription:String? { switch self { case .resource:return "Photos could not provide this file."; case .receiver:return "PC receiver could not be reached."; case .write:return "Destination verification failed." } } }
