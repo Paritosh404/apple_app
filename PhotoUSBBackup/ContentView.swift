@@ -60,7 +60,6 @@ struct ContentView: View {
                             Label("Show Transfer Progress", systemImage: "chart.bar.fill").frame(maxWidth: .infinity)
                         }.buttonStyle(.bordered)
                     }
-                    if manager.isPreparing { Button(role: .destructive) { manager.stopCopy() } label: { Label("Pause Preparation", systemImage: "pause.circle") } }
                     if !manager.failures.isEmpty { Button { showFailures = true } label: { Label("Show Recent Failures", systemImage: "exclamationmark.triangle") } }
                 }.padding()
             }
@@ -105,6 +104,7 @@ private struct TransferProgressView: View {
     @EnvironmentObject private var manager: AlbumCopyManager
     @Binding var isPresented: Bool
     @State private var showFailures = false
+    @State private var showStopConfirmation = false
 
     private var finishedCount: Int {
         manager.stats.copiedFiles + manager.stats.skippedFiles + manager.stats.failedFiles
@@ -199,7 +199,17 @@ private struct TransferProgressView: View {
                         metric("Failed", manager.stats.failedFiles, "exclamationmark.triangle.fill", .red)
                     }
 
-                    if manager.transferMode == .wifi && manager.pendingUploads > 0 {
+                    if manager.uploadsPaused {
+                        Label(
+                            "All preparation and queued uploads are paused. Staged files are preserved until you resume or stop the transfer.",
+                            systemImage: "pause.circle.fill"
+                        )
+                        .font(.subheadline)
+                        .foregroundStyle(.orange)
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+                    } else if manager.transferMode == .wifi && manager.pendingUploads > 0 {
                         Label(
                             "Uploads can continue when you open another app or lock the screen. Do not swipe Album Copy away from the app switcher.",
                             systemImage: "iphone.and.arrow.forward"
@@ -211,9 +221,21 @@ private struct TransferProgressView: View {
                         .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
                     }
 
-                    if manager.isPreparing {
-                        Button(role: .destructive) { manager.stopCopy() } label: {
-                            Label("Pause Preparation", systemImage: "pause.circle.fill")
+                    if manager.isRunning {
+                        Button {
+                            if manager.uploadsPaused { manager.resumeAllOperations() }
+                            else { manager.pauseAllOperations() }
+                        } label: {
+                            Label(
+                                manager.uploadsPaused ? "Resume All Operations" : "Pause All Operations",
+                                systemImage: manager.uploadsPaused ? "play.circle.fill" : "pause.circle.fill"
+                            )
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button(role: .destructive) { showStopConfirmation = true } label: {
+                            Label("Stop Transfer and Clear Queue", systemImage: "stop.circle.fill")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
@@ -251,6 +273,18 @@ private struct TransferProgressView: View {
                     }
                     .navigationTitle("Recent Failures")
                 }
+            }
+            .confirmationDialog(
+                "Stop this transfer?",
+                isPresented: $showStopConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Stop and Clear Queue", role: .destructive) {
+                    manager.stopAllOperations()
+                }
+                Button("Keep Transfer", role: .cancel) { }
+            } message: {
+                Text("Queued uploads will be cancelled and their staged files removed. Files already saved on the PC will not be deleted.")
             }
         }
     }

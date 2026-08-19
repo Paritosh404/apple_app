@@ -14,13 +14,16 @@ final class BackgroundUploadCoordinator: NSObject, URLSessionTaskDelegate, URLSe
     }
 
     enum Event {
-        case restored(pending: Int)
+        case restored(pending: Int, paused: Bool)
         case progress(metadata: UploadMetadata, sent: Int64, expected: Int64, pending: Int)
         case completed(metadata: UploadMetadata, success: Bool, message: String?, pending: Int)
+        case queueState(paused: Bool, pending: Int)
+        case stopped(cancelled: Int)
     }
 
     var eventHandler: ((Event) -> Void)?
     private var systemCompletionHandler: (() -> Void)?
+    private var userCancelledTaskIDs = Set<Int>()
 
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.background(withIdentifier: Self.sessionIdentifier)
@@ -43,7 +46,46 @@ final class BackgroundUploadCoordinator: NSObject, URLSessionTaskDelegate, URLSe
     func restoreTasks() {
         session.getAllTasks { [weak self] tasks in
             DispatchQueue.main.async {
-                self?.eventHandler?(.restored(pending: tasks.filter { $0.state != .completed }.count))
+                let active = tasks.filter { $0.state != .completed }
+                let paused = !active.isEmpty && active.allSatisfy { $0.state == .suspended }
+                self?.eventHandler?(.restored(pending: active.count, paused: paused))
+            }
+        }
+    }
+
+    func pauseAll() {
+        session.getAllTasks { [weak self] tasks in
+            DispatchQueue.main.async {
+                let active = tasks.filter { $0.state != .completed }
+                active.forEach { $0.suspend() }
+                self?.eventHandler?(.queueState(paused: true, pending: active.count))
+            }
+        }
+    }
+
+    func resumeAll() {
+        session.getAllTasks { [weak self] tasks in
+            DispatchQueue.main.async {
+                let active = tasks.filter { $0.state != .completed }
+                active.forEach { $0.resume() }
+                self?.eventHandler?(.queueState(paused: false, pending: active.count))
+            }
+        }
+    }
+
+    func cancelAll() {
+        session.getAllTasks { [weak self] tasks in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let active = tasks.filter { $0.state != .completed }
+                for task in active {
+                    self.userCancelledTaskIDs.insert(task.taskIdentifier)
+                    if let metadata = self.metadata(for: task) {
+                        try? FileManager.default.removeItem(atPath: metadata.localFilePath)
+                    }
+                    task.cancel()
+                }
+                self.eventHandler?(.stopped(cancelled: active.count))
             }
         }
     }
@@ -104,6 +146,7 @@ final class BackgroundUploadCoordinator: NSObject, URLSessionTaskDelegate, URLSe
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if userCancelledTaskIDs.remove(task.taskIdentifier) != nil { return }
         guard let metadata = metadata(for: task) else { return }
         let statusCode = (task.response as? HTTPURLResponse)?.statusCode
         let success = error == nil && statusCode.map { (200...299).contains($0) } == true

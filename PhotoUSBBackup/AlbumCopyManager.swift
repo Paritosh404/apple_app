@@ -16,6 +16,7 @@ final class AlbumCopyManager: ObservableObject {
     @Published var isRunning = false
     @Published var isPreparing = false
     @Published var pendingUploads = 0
+    @Published var uploadsPaused = false
     @Published var currentItem = ""
     @Published var currentBytesSent: Int64 = 0
     @Published var currentBytesExpected: Int64 = 0
@@ -25,6 +26,7 @@ final class AlbumCopyManager: ObservableObject {
     private var backgroundTaskID:UIBackgroundTaskIdentifier = .invalid
     private var transferTask:Task<Void,Never>?
     private var backgroundExpired = false
+    private var stopRequested = false
     private let backgroundUploader = BackgroundUploadCoordinator.shared
     private lazy var foregroundSession: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -36,7 +38,7 @@ final class AlbumCopyManager: ObservableObject {
     }()
 
     var canStart: Bool {
-        guard !isPreparing, selectedSource != nil else { return false }
+        guard !isPreparing, !uploadsPaused, selectedSource != nil else { return false }
         if pendingUploads > 0 && (stats.totalAssets == 0 || preparationComplete) { return false }
         return transferMode == .usb ? destinationURL != nil : (!receiverHost.trimmingCharacters(in: .whitespaces).isEmpty && Int(receiverPort) != nil)
     }
@@ -47,6 +49,7 @@ final class AlbumCopyManager: ObservableObject {
 
     var primaryActionTitle: String {
         if isPreparing { return "Preparing Transfer…" }
+        if uploadsPaused { return "Operations Paused" }
         if pendingUploads > 0 && (stats.totalAssets == 0 || preparationComplete) { return "Uploads Running…" }
         if stats.totalAssets > 0 && stats.processedAssets < stats.totalAssets { return "Resume Preparation" }
         if preparationComplete && stats.failedFiles > 0 { return "Retry Failed Files" }
@@ -77,11 +80,37 @@ final class AlbumCopyManager: ObservableObject {
     func setDestination(_ url: URL) { destinationURL = url; status = "USB destination selected." }
     func selectSource(_ node: PhotoTreeNode) { selectedSource = node; status = "Selected \(node.title)" }
     func stopCopy() {
+        pauseAllOperations()
+    }
+
+    func pauseAllOperations() {
+        guard isRunning else { return }
         shouldStop = true
+        uploadsPaused = true
         transferTask?.cancel()
-        status = pendingUploads > 0
-            ? "Stopping preparation — queued background uploads will continue."
-            : "Stopping after the current file…"
+        backgroundUploader.pauseAll()
+        status = "Pausing preparation and queued uploads…"
+    }
+
+    func resumeAllOperations() {
+        guard uploadsPaused else { return }
+        shouldStop = false
+        uploadsPaused = false
+        backgroundUploader.resumeAll()
+        status = "Resuming queued uploads…"
+        if !preparationComplete, !isPreparing, selectedSource != nil {
+            startCopy()
+        }
+    }
+
+    func stopAllOperations() {
+        guard isRunning else { return }
+        stopRequested = true
+        shouldStop = true
+        uploadsPaused = false
+        transferTask?.cancel()
+        backgroundUploader.cancelAll()
+        status = "Stopping transfer and clearing the upload queue…"
     }
 
     func refreshPhotoTree() {
@@ -119,8 +148,9 @@ final class AlbumCopyManager: ObservableObject {
             await run(source)
             endBackgroundTransfer()
             isPreparing = false
-            updateRunningState()
             transferTask = nil
+            if stopRequested { resetAfterStop() }
+            else { updateRunningState() }
         }
     }
 
@@ -160,7 +190,9 @@ final class AlbumCopyManager: ObservableObject {
                 try await copyWiFi(source, clean(source.title), false)
             }
             if shouldStop {
-                status = pendingUploads > 0
+                status = uploadsPaused
+                    ? "Operations paused — queued uploads are preserved."
+                    : pendingUploads > 0
                     ? "Preparation paused — \(pendingUploads) queued upload(s) continue in the background."
                     : (backgroundExpired ? "Transfer paused — tap Resume Transfer." : "Stopped — tap Resume Transfer.")
             } else if pendingUploads > 0 {
@@ -169,7 +201,9 @@ final class AlbumCopyManager: ObservableObject {
                 status = "Complete — \(stats.copiedFiles) copied, \(stats.skippedFiles) skipped, \(stats.failedFiles) failed."
             }
         } catch is CancellationError {
-            status = pendingUploads > 0
+            status = uploadsPaused
+                ? "Operations paused — queued uploads are preserved."
+                : pendingUploads > 0
                 ? "Preparation paused — queued uploads continue in the background."
                 : "Transfer paused — tap Resume Transfer."
         } catch { status = "Transfer stopped: \(error.localizedDescription)" }
@@ -290,11 +324,14 @@ final class AlbumCopyManager: ObservableObject {
     }
     private func handleBackgroundUploadEvent(_ event:BackgroundUploadCoordinator.Event) {
         switch event {
-        case .restored(let pending):
+        case .restored(let pending, let paused):
             pendingUploads = pending
+            uploadsPaused = paused
             stats.queuedFiles = max(stats.queuedFiles, pending)
             if pending > 0 {
-                status = "Restored \(pending) background upload(s). You may leave the app."
+                status = paused
+                    ? "Restored \(pending) paused upload(s)."
+                    : "Restored \(pending) background upload(s). You may leave the app."
             }
         case .progress(let metadata, let sent, let expected, let pending):
             pendingUploads = pending
@@ -318,11 +355,34 @@ final class AlbumCopyManager: ObservableObject {
                     ? "Upload failed; continuing with \(pending) remaining."
                     : "Transfer finished with \(stats.failedFiles) failure(s). Tap Resume Transfer to retry."
             }
+        case .queueState(let paused, let pending):
+            uploadsPaused = paused
+            pendingUploads = pending
+            status = paused
+                ? "Operations paused — \(pending) queued upload(s) preserved."
+                : "Resumed \(pending) queued upload(s)."
+        case .stopped:
+            pendingUploads = 0
+            uploadsPaused = false
+            if !isPreparing { resetAfterStop() }
         }
         updateRunningState()
     }
+    private func resetAfterStop() {
+        stopRequested = false
+        shouldStop = false
+        uploadsPaused = false
+        pendingUploads = 0
+        currentItem = ""
+        currentBytesSent = 0
+        currentBytesExpected = 0
+        stats = CopyStats()
+        failures = []
+        status = "Transfer stopped. The queue has been cleared."
+        updateRunningState()
+    }
     private func updateRunningState() {
-        isRunning = isPreparing || pendingUploads > 0
+        isRunning = isPreparing || pendingUploads > 0 || uploadsPaused
     }
     private func endpoint(_ p:String)throws->URL { guard let u=URL(string:"http://\(receiverHost):\(receiverPort)\(p)") else{throw CopyError.receiver}; return u }
     private func album(_ id:String)->PHAssetCollection? { PHAssetCollection.fetchAssetCollections(withLocalIdentifiers:[id],options:nil).firstObject }
