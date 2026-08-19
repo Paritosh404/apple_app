@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var showDestinationPicker = false
     @State private var showAlbumPicker = false
     @State private var showFailures = false
+    @State private var showQRScanner = false
 
     var body: some View {
         NavigationStack {
@@ -37,6 +38,9 @@ struct ContentView: View {
                         if let destination = manager.destinationURL { Text("Destination: \(destination.lastPathComponent)").font(.headline) }
                     } else {
                         VStack(alignment: .leading, spacing: 8) {
+                            Button { showQRScanner = true } label: {
+                                Label("Scan Receiver QR", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity)
+                            }.buttonStyle(.borderedProminent)
                             TextField("PC IP address", text: $manager.receiverHost).textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled()
                             TextField("Port", text: $manager.receiverPort).textFieldStyle(.roundedBorder).keyboardType(.numberPad)
                             Text("Example: 192.168.1.20 : 8765").font(.caption).foregroundStyle(.secondary)
@@ -52,6 +56,23 @@ struct ContentView: View {
             .navigationTitle("USB / Wi-Fi Copy")
             .sheet(isPresented: $showDestinationPicker) { FolderPicker { url in manager.setDestination(url) } }
             .sheet(isPresented: $showAlbumPicker) { AlbumPickerView().environmentObject(manager) }
+            .sheet(isPresented: $showQRScanner) {
+                NavigationStack {
+                    ZStack {
+                        QRScannerView { code in
+                            showQRScanner = false
+                            Task { await manager.connectFromQRCode(code) }
+                        }.ignoresSafeArea()
+                        RoundedRectangle(cornerRadius: 22)
+                            .stroke(.white, lineWidth: 4)
+                            .frame(width: 250, height: 250)
+                    }
+                    .navigationTitle("Scan Receiver QR")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showQRScanner = false } }
+                    }
+                }
+            }
             .sheet(isPresented: $showFailures) {
                 NavigationStack { List(manager.failures) { failure in VStack(alignment: .leading, spacing: 4) { Text(failure.path).font(.headline); Text(failure.reason).font(.caption).foregroundStyle(.secondary) } }.navigationTitle("Recent Failures") }
             }
