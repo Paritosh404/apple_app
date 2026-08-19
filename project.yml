@@ -20,8 +20,8 @@ targets:
       path: PhotoUSBBackup/Info.plist
       properties:
         CFBundleDisplayName: Album Copy
-        CFBundleShortVersionString: "3.0"
-        CFBundleVersion: "30"
+        CFBundleShortVersionString: "3.0.1"
+        CFBundleVersion: "31"
         LSRequiresIPhoneOS: true
         NSPhotoLibraryUsageDescription: "Album Copy needs access to read your Photos albums and copy them to an external drive."
         BGTaskSchedulerPermittedIdentifiers:

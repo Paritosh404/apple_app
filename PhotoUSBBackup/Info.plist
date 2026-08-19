@@ -9,8 +9,8 @@
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
     <key>CFBundlePackageType</key><string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
-    <key>CFBundleShortVersionString</key><string>3.0</string>
-    <key>CFBundleVersion</key><string>30</string>
+    <key>CFBundleShortVersionString</key><string>3.0.1</string>
+    <key>CFBundleVersion</key><string>31</string>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>Album Copy needs access to read your Photos albums and copy them to an external drive.</string>

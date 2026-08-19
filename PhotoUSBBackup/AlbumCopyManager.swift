@@ -244,20 +244,173 @@ final class AlbumCopyManager: ObservableObject {
 
         let partialURL = finalURL.appendingPathExtension("partial")
         try? FileManager.default.removeItem(at: partialURL)
-        try FileManager.default.copyItem(at: localTemp, to: partialURL)
 
-        let partialBytes = fileSize(of: partialURL)
-        guard partialBytes == localBytes, partialBytes > 0 else {
-            try? FileManager.default.removeItem(at: partialURL)
-            throw CopyError.verificationFailed(filename)
-        }
+        try streamLocalFileToUSB(
+            sourceURL: localTemp,
+            partialURL: partialURL,
+            finalURL: finalURL,
+            expectedBytes: localBytes
+        )
 
-        try FileManager.default.moveItem(at: partialURL, to: finalURL)
-        guard fileSize(of: finalURL) == localBytes else {
-            try? FileManager.default.removeItem(at: finalURL)
-            throw CopyError.verificationFailed(filename)
-        }
         return (1, 0)
+    }
+
+
+    private func streamLocalFileToUSB(
+        sourceURL: URL,
+        partialURL: URL,
+        finalURL: URL,
+        expectedBytes: Int64
+    ) throws {
+        var sourceHandle: FileHandle?
+        var destinationHandle: FileHandle?
+
+        do {
+            do {
+                sourceHandle = try FileHandle(forReadingFrom: sourceURL)
+            } catch {
+                throw usbError(
+                    stage: "open source",
+                    file: sourceURL.lastPathComponent,
+                    underlying: error
+                )
+            }
+
+            guard FileManager.default.createFile(
+                atPath: partialURL.path,
+                contents: nil
+            ) else {
+                throw CopyError.usbWrite(
+                    stage: "create",
+                    filename: partialURL.lastPathComponent,
+                    domain: "FileManager",
+                    code: -1,
+                    message: "Could not create USB .partial file."
+                )
+            }
+
+            do {
+                destinationHandle = try FileHandle(forWritingTo: partialURL)
+            } catch {
+                throw usbError(
+                    stage: "open destination",
+                    file: partialURL.lastPathComponent,
+                    underlying: error
+                )
+            }
+
+            let chunkSize = 1024 * 1024
+            var written: Int64 = 0
+
+            while true {
+                let data: Data
+                do {
+                    data = try sourceHandle!.read(upToCount: chunkSize) ?? Data()
+                } catch {
+                    throw usbError(
+                        stage: "read local temp",
+                        file: sourceURL.lastPathComponent,
+                        underlying: error
+                    )
+                }
+
+                if data.isEmpty {
+                    break
+                }
+
+                do {
+                    try destinationHandle!.write(contentsOf: data)
+                    written += Int64(data.count)
+                } catch {
+                    throw usbError(
+                        stage: "write USB",
+                        file: partialURL.lastPathComponent,
+                        underlying: error
+                    )
+                }
+            }
+
+            do {
+                try destinationHandle?.synchronize()
+                try destinationHandle?.close()
+                destinationHandle = nil
+            } catch {
+                throw usbError(
+                    stage: "flush/close USB",
+                    file: partialURL.lastPathComponent,
+                    underlying: error
+                )
+            }
+
+            do {
+                try sourceHandle?.close()
+                sourceHandle = nil
+            } catch {
+                throw usbError(
+                    stage: "close source",
+                    file: sourceURL.lastPathComponent,
+                    underlying: error
+                )
+            }
+
+            let partialBytes = fileSize(of: partialURL)
+            guard written == expectedBytes,
+                  partialBytes == expectedBytes,
+                  partialBytes > 0 else {
+                throw CopyError.usbWrite(
+                    stage: "verify",
+                    filename: partialURL.lastPathComponent,
+                    domain: "PhotoUSBBackup",
+                    code: -2,
+                    message: "Expected \(expectedBytes) bytes, wrote \(written), USB file reports \(partialBytes)."
+                )
+            }
+
+            do {
+                try FileManager.default.moveItem(
+                    at: partialURL,
+                    to: finalURL
+                )
+            } catch {
+                throw usbError(
+                    stage: "rename",
+                    file: finalURL.lastPathComponent,
+                    underlying: error
+                )
+            }
+
+            let finalBytes = fileSize(of: finalURL)
+            guard finalBytes == expectedBytes else {
+                try? FileManager.default.removeItem(at: finalURL)
+                throw CopyError.usbWrite(
+                    stage: "final verify",
+                    filename: finalURL.lastPathComponent,
+                    domain: "PhotoUSBBackup",
+                    code: -3,
+                    message: "Expected \(expectedBytes) bytes, final file reports \(finalBytes)."
+                )
+            }
+        } catch {
+            try? destinationHandle?.close()
+            try? sourceHandle?.close()
+            try? FileManager.default.removeItem(at: partialURL)
+            throw error
+        }
+    }
+
+    private func usbError(
+        stage: String,
+        file: String,
+        underlying error: Error
+    ) -> CopyError {
+        let nsError = error as NSError
+        return .usbWrite(
+            stage: stage,
+            filename: file,
+            domain: nsError.domain,
+            code: nsError.code,
+            message: nsError.localizedDescription
+        )
     }
 
     private func preferredCurrentResource(for asset: PHAsset) -> PHAssetResource? {
@@ -325,13 +478,20 @@ enum CopyError: LocalizedError {
     case noUsableResource
     case emptyFile(String)
     case verificationFailed(String)
+    case usbWrite(stage: String, filename: String, domain: String, code: Int, message: String)
 
     var errorDescription: String? {
         switch self {
-        case .albumUnavailable(let name): return "The Photos album \(name) is no longer available."
-        case .noUsableResource: return "Photos did not expose a usable resource for this asset."
-        case .emptyFile(let name): return "Photos produced an empty file for \(name)."
-        case .verificationFailed(let name): return "USB verification failed for \(name)."
+        case .albumUnavailable(let name):
+            return "The Photos album \(name) is no longer available."
+        case .noUsableResource:
+            return "Photos did not expose a usable resource for this asset."
+        case .emptyFile(let name):
+            return "Photos produced an empty file for \(name)."
+        case .verificationFailed(let name):
+            return "USB verification failed for \(name)."
+        case .usbWrite(let stage, let filename, let domain, let code, let message):
+            return "USB \(stage) failed for \(filename) [\(domain) \(code)]: \(message)"
         }
     }
 }

@@ -1,0 +1,10 @@
+PhotoUSBBackup v3.0.1
+=====================
+- Based directly on v3.0 Album Copy.
+- Replaced FileManager.copyItem(localTemp -> USB .partial) with 1 MiB chunked streaming.
+- Explicitly closes source/destination FileHandles on success and error paths.
+- Verifies bytes written and USB .partial size before rename.
+- Verifies final size after rename.
+- Deletes incomplete .partial files after failures.
+- Error log now shows stage + NSError domain/code/message.
+- Album hierarchy, easy skip, PhotoKit local staging, one-at-a-time processing, bundle ID and workflow remain unchanged.

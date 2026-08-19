@@ -1,4 +1,4 @@
-# PhotoUSBBackup v3.0 — Album Copy
+# PhotoUSBBackup v3.0.1 — Album Copy
 
 This is a simplified branch focused on copying the Photos album/folder structure already organized on the iPhone to an external USB/SSD.
 
@@ -35,3 +35,24 @@ This branch intentionally does not perform the old GPS reconciliation, RAW/origi
 ## First test
 
 Use one small album/folder first. Confirm the USB hierarchy matches Photos, files open correctly, and a second run reports the existing files as skipped.
+
+
+## v3.0.1 USB streaming fix
+
+v3.0.1 keeps the v3.0 album-copy design unchanged and replaces only the
+local-temp → USB copy operation.
+
+Old path:
+
+`local temp -> FileManager.copyItem -> USB .partial`
+
+New path:
+
+`local temp -> 1 MiB streamed chunks -> USB .partial -> flush/close -> size verify -> rename -> final size verify`
+
+Failure messages now identify the exact stage and include the underlying
+NSError domain, code, and message, for example:
+
+`USB write USB failed for IMG_3053.MOV.partial [NSCocoaErrorDomain 512]: ...`
+
+This makes external-drive failures much easier to diagnose.
