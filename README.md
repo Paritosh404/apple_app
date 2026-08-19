@@ -1,4 +1,4 @@
-# PhotoUSBBackup v3.7.2 — Album Copy
+# PhotoUSBBackup v3.7.3 — Album Copy
 
 This is a simplified branch focused on copying the Photos album/folder structure already organized on the iPhone to an external USB/SSD.
 
@@ -45,6 +45,12 @@ iOS cancels background transfers if the user explicitly swipes the app away from
 - **Resume All Operations** resumes the same upload tasks and continues incomplete preparation.
 - **Stop Transfer and Clear Queue** requires confirmation, cancels queued tasks, and removes only their staged app files; completed files on the PC remain untouched.
 - User-cancelled task callbacks are excluded from the failed counter.
+
+### v3.7.3 accurate transfer indicator
+
+- The main progress bar now counts only files newly saved on the PC plus same-size files verified as already present.
+- Photo preparation and queued background uploads are displayed as separate values, so completing preparation can no longer make the transfer appear finished.
+- The progress screen uses the same **Complete on PC** definition and does not count failed files as successful completion.
 
 ## Windows build
 

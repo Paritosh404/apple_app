@@ -8,6 +8,10 @@ struct ContentView: View {
     @State private var showQRScanner = false
     @State private var showTransferScreen = false
 
+    private var completeOnPC: Int {
+        manager.stats.copiedFiles + manager.stats.skippedFiles
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -22,8 +26,21 @@ struct ContentView: View {
                         .multilineTextAlignment(.center)
                         .lineLimit(3, reservesSpace: true)
                     if manager.stats.totalAssets > 0 {
-                        ProgressView(value: Double(manager.stats.processedAssets), total: Double(manager.stats.totalAssets))
-                        HStack { Text("\(manager.stats.processedAssets) / \(manager.stats.totalAssets)"); Spacer(); Text("\(manager.stats.copiedFiles) copied") }.font(.subheadline)
+                        ProgressView(value: Double(completeOnPC), total: Double(manager.stats.totalAssets))
+                        HStack {
+                            Text("\(completeOnPC) / \(manager.stats.totalAssets) complete on PC")
+                            Spacer()
+                            if manager.uploadsPaused { Text("Paused") }
+                            else if manager.transferMode == .wifi { Text("\(manager.pendingUploads) queued") }
+                            else { Text("\(manager.stats.copiedFiles) copied") }
+                        }.font(.subheadline)
+                        if manager.transferMode == .wifi {
+                            HStack {
+                                Text("\(manager.stats.processedAssets) prepared")
+                                Spacer()
+                                Text("\(manager.stats.copiedFiles) newly saved")
+                            }.font(.caption).foregroundStyle(.secondary)
+                        }
                         HStack { Text("\(manager.stats.skippedFiles) skipped"); Spacer(); Text("\(manager.stats.failedFiles) failed") }.font(.caption).foregroundStyle(.secondary)
                     }
                     Divider()
@@ -107,7 +124,7 @@ private struct TransferProgressView: View {
     @State private var showStopConfirmation = false
 
     private var finishedCount: Int {
-        manager.stats.copiedFiles + manager.stats.skippedFiles + manager.stats.failedFiles
+        manager.stats.copiedFiles + manager.stats.skippedFiles
     }
 
     private var overallProgress: Double {
@@ -144,7 +161,7 @@ private struct TransferProgressView: View {
 
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text("Overall").font(.headline)
+                            Text("Complete on PC").font(.headline)
                             Spacer()
                             Text("\(finishedCount) of \(manager.stats.totalAssets)")
                                 .font(.subheadline.monospacedDigit())
