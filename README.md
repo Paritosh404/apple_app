@@ -1,4 +1,4 @@
-# PhotoUSBBackup v3.7.4 — Album Copy
+# PhotoUSBBackup v3.7.5 — Album Copy
 
 This is a simplified branch focused on copying the Photos album/folder structure already organized on the iPhone to an external USB/SSD.
 
@@ -6,8 +6,8 @@ This is a simplified branch focused on copying the Photos album/folder structure
 
 - Select a top-level user album or Photos folder.
 - Recursively recreate nested Photos folder/album structure on USB.
-- Prefer the current full-size Photos rendition (`fullSizePhoto` / `fullSizeVideo`).
-- Fall back to the ordinary photo/video resource when needed.
+- Copy the original Photos resource (`photo` / `video`) so edited or rendered versions are not substituted in a backup.
+- Fall back to the adjustment base and then the current full-size rendition only when Photos does not expose the original resource.
 - Allow iCloud download.
 - Stage one asset at a time in the app's local temporary directory.
 - Copy to `filename.partial` on USB first.
@@ -58,6 +58,12 @@ iOS cancels background transfers if the user explicitly swipes the app away from
 - Resume skips those identifiers before staging or checking the receiver, instead of rereading the selected source from item 1.
 - The prepared counter is derived from the unique processed-item set and cannot exceed the selected-source total.
 - Choosing a different source, starting a genuinely new transfer, or confirming Stop clears the resume set.
+
+### v3.7.5 original media and size integrity
+
+- Photo and video staging now explicitly selects the original Photos resource before any adjusted or rendered resource.
+- The PC receiver continues to accept a file only after the received byte count exactly matches the staged source byte count.
+- Compare exact byte counts when checking sizes. iPhone commonly displays decimal GB while Windows displays binary GiB values but labels them GB; for example, 6.4 billion bytes is about 5.96 GiB.
 
 ## Windows build
 

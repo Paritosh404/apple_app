@@ -296,8 +296,27 @@ final class AlbumCopyManager: ObservableObject {
         }
     }
 
+    private func originalResource(for asset:PHAsset) -> PHAssetResource? {
+        let resources=PHAssetResource.assetResources(for:asset)
+        let preferredTypes:[PHAssetResourceType]
+        switch asset.mediaType {
+        case .image:
+            preferredTypes=[.photo,.adjustmentBasePhoto,.fullSizePhoto]
+        case .video:
+            preferredTypes=[.video,.adjustmentBaseVideo,.fullSizeVideo]
+        case .audio:
+            preferredTypes=[.audio]
+        default:
+            preferredTypes=[]
+        }
+        for type in preferredTypes {
+            if let resource=resources.first(where:{$0.type == type}) { return resource }
+        }
+        return resources.first
+    }
+
     private func stage(_ asset:PHAsset, persistent:Bool = false) async throws -> (url:URL,name:String,bytes:Int64) {
-        let rs=PHAssetResource.assetResources(for:asset); guard let r=rs.first(where:{$0.type == .fullSizePhoto || $0.type == .fullSizeVideo}) ?? rs.first else {throw CopyError.resource}
+        guard let r=originalResource(for:asset) else {throw CopyError.resource}
         let name=uniqueAssetName(r.originalFilename, asset.localIdentifier)
         let directory:URL
         if persistent {
